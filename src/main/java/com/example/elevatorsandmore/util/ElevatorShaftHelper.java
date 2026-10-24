@@ -25,6 +25,7 @@ import com.example.elevatorsandmore.network.FloorInfo;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -32,9 +33,13 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BaseRailBlock;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.RailState;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.RailShape;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.network.PacketDistributor;
 
@@ -402,16 +407,23 @@ public class ElevatorShaftHelper {
                     floorState
             ));
 
-            // Check if there is an accessory (Safety Railing or Control Pedestal) directly on top
+            // Check if there is a surface block, rail, or accessory directly on top of the floor
             BlockPos topPos = current.above();
             BlockState topState = level.getBlockState(topPos);
-            if (topState.getBlock() instanceof IndustrialSafetyRailingBlock ||
-                topState.getBlock() instanceof IndustrialControlPedestalBlock) {
+            if (!topState.isAir() &&
+                !(topState.getBlock() instanceof IndustrialGuideRailBlock) &&
+                !(topState.getBlock() instanceof IndustrialElevatorStationBlock)) {
+                CompoundTag nbt = null;
+                BlockEntity be = level.getBlockEntity(topPos);
+                if (be != null) {
+                    nbt = be.saveCustomOnly(level.registryAccess());
+                }
                 captured.add(new CapturedBlockEntry(
                         topPos.getX() - floorAnchor.getX(),
                         1,
                         topPos.getZ() - floorAnchor.getZ(),
-                        topState
+                        topState,
+                        nbt
                 ));
             }
 
@@ -589,10 +601,24 @@ public class ElevatorShaftHelper {
         carriage.setupPlatform(railPos, floorAnchor, departureY, targetFloorY, blocks);
         level.addFreshEntity(carriage);
 
-        // Remove blocks from the world cleanly
+        // Remove blocks from the world cleanly:
+        // 1. Remove relY == 1 surface blocks/rails FIRST so rails don't pop off when floor below disappears
+        int removalFlags = Block.UPDATE_CLIENTS | Block.UPDATE_SUPPRESS_DROPS | Block.UPDATE_KNOWN_SHAPE;
         for (CapturedBlockEntry entry : blocks) {
-            BlockPos worldPos = floorAnchor.offset(entry.relX(), entry.relY(), entry.relZ());
-            level.setBlock(worldPos, Blocks.AIR.defaultBlockState(), 3);
+            if (entry.relY() == 1) {
+                BlockPos worldPos = floorAnchor.offset(entry.relX(), entry.relY(), entry.relZ());
+                level.removeBlockEntity(worldPos);
+                level.setBlock(worldPos, Blocks.AIR.defaultBlockState(), removalFlags);
+            }
+        }
+
+        // 2. Remove relY == 0 floor blocks SECOND
+        for (CapturedBlockEntry entry : blocks) {
+            if (entry.relY() == 0) {
+                BlockPos worldPos = floorAnchor.offset(entry.relX(), entry.relY(), entry.relZ());
+                level.removeBlockEntity(worldPos);
+                level.setBlock(worldPos, Blocks.AIR.defaultBlockState(), removalFlags);
+            }
         }
 
         // Keep entities standing on the newly formed carriage without falling
@@ -645,5 +671,54 @@ public class ElevatorShaftHelper {
         return true;
     }
 
-    public record CapturedBlockEntry(int relX, int relY, int relZ, BlockState state) {}
+    public static void reconnectPlatformRails(Level level, BlockPos newAnchor, List<CapturedBlockEntry> blocks) {
+        List<BlockPos> railPositions = new ArrayList<>();
+        for (CapturedBlockEntry entry : blocks) {
+            if (entry.relY() == 1 && entry.state().getBlock() instanceof BaseRailBlock) {
+                railPositions.add(newAnchor.offset(entry.relX(), 1, entry.relZ()));
+            }
+        }
+
+        if (railPositions.isEmpty()) {
+            return;
+        }
+
+        // 1. Re-evaluate connections on platform rails
+        for (BlockPos rPos : railPositions) {
+            BlockState rState = level.getBlockState(rPos);
+            if (rState.getBlock() instanceof BaseRailBlock railBlock) {
+                RailShape shape = rState.getValue(railBlock.getShapeProperty());
+                new RailState(level, rPos, rState).place(level.hasNeighborSignal(rPos), true, shape);
+                level.updateNeighborsAt(rPos, railBlock);
+            }
+        }
+
+        // 2. Re-evaluate adjacent tracks on the floor outside the platform
+        for (BlockPos rPos : railPositions) {
+            for (Direction dir : Direction.Plane.HORIZONTAL) {
+                BlockPos neighborPos = rPos.relative(dir);
+                BlockState neighborState = level.getBlockState(neighborPos);
+                if (neighborState.getBlock() instanceof BaseRailBlock neighborRail) {
+                    RailShape shape = neighborState.getValue(neighborRail.getShapeProperty());
+                    new RailState(level, neighborPos, neighborState).place(level.hasNeighborSignal(neighborPos), false, shape);
+                    level.updateNeighborsAt(neighborPos, neighborRail);
+                }
+            }
+        }
+    }
+
+    public static boolean callElevatorToStation(ServerLevel level, BlockPos stationPos) {
+        BlockPos railPos = findAdjacentRail(level, stationPos);
+        if (railPos == null) {
+            return false;
+        }
+        int targetFloorY = resolveStationFloorY(level, railPos, stationPos);
+        return startElevator(level, railPos, stationPos, targetFloorY, null);
+    }
+
+    public record CapturedBlockEntry(int relX, int relY, int relZ, BlockState state, @Nullable CompoundTag nbt) {
+        public CapturedBlockEntry(int relX, int relY, int relZ, BlockState state) {
+            this(relX, relY, relZ, state, null);
+        }
+    }
 }

@@ -1,7 +1,10 @@
 package com.example.elevatorsandmore.entity;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import org.jspecify.annotations.Nullable;
 
@@ -10,9 +13,12 @@ import com.example.elevatorsandmore.block.IndustrialControlPedestalBlock;
 import com.example.elevatorsandmore.block.IndustrialElevatorStationBlock;
 import com.example.elevatorsandmore.block.IndustrialSafetyRailingBlock;
 import com.example.elevatorsandmore.util.ElevatorShaftHelper;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.TagParser;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -20,6 +26,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
@@ -29,9 +36,13 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.Relative;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.vehicle.minecart.AbstractMinecart;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BaseRailBlock;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.TagValueInput;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.AABB;
@@ -50,6 +61,28 @@ public class IndustrialElevatorCarriageEntity extends Entity {
     private static final EntityDataAccessor<String> DATA_BLOCKS =
             SynchedEntityData.defineId(IndustrialElevatorCarriageEntity.class, EntityDataSerializers.STRING);
 
+    public static class CarriedMinecartInfo {
+        public final UUID uuid;
+        public final double relX;
+        public final double relZ;
+        public final float yRot;
+        public final double velX;
+        public final double velZ;
+        public final boolean hasRail;
+
+        public CarriedMinecartInfo(UUID uuid, double relX, double relZ, float yRot, double velX, double velZ, boolean hasRail) {
+            this.uuid = uuid;
+            this.relX = relX;
+            this.relZ = relZ;
+            this.yRot = yRot;
+            this.velX = velX;
+            this.velZ = velZ;
+            this.hasRail = hasRail;
+        }
+    }
+
+    private final List<ElevatorShaftHelper.CapturedBlockEntry> serverCapturedBlocks = new ArrayList<>();
+    private final Map<UUID, CarriedMinecartInfo> carriedCarts = new HashMap<>();
     private final List<ElevatorShaftHelper.CapturedBlockEntry> parsedBlocks = new ArrayList<>();
     private String lastParsedBlocksStr = "";
     private int minRelX = 0, maxRelX = 0, minRelZ = 0, maxRelZ = 0;
@@ -83,6 +116,9 @@ public class IndustrialElevatorCarriageEntity extends Entity {
         this.entityData.set(DATA_START_Y, startY);
         this.entityData.set(DATA_TARGET_Y, targetY);
 
+        this.serverCapturedBlocks.clear();
+        this.serverCapturedBlocks.addAll(blocks);
+
         StringBuilder sb = new StringBuilder();
         for (ElevatorShaftHelper.CapturedBlockEntry b : blocks) {
             if (sb.length() > 0) sb.append(';');
@@ -95,6 +131,68 @@ public class IndustrialElevatorCarriageEntity extends Entity {
 
         this.refreshParsedBlocks();
         this.setPos(floorAnchor.getX() + 0.5, startY, floorAnchor.getZ() + 0.5);
+
+        if (!this.level().isClientSide()) {
+            scanAndCaptureMinecarts(floorAnchor, startY);
+        }
+    }
+
+    public boolean isRailAtRelative(double relX, double relZ) {
+        int rx = (int) Math.floor(relX);
+        int rz = (int) Math.floor(relZ);
+        List<ElevatorShaftHelper.CapturedBlockEntry> blocks = this.serverCapturedBlocks.isEmpty() ? getParsedBlocks() : this.serverCapturedBlocks;
+        for (ElevatorShaftHelper.CapturedBlockEntry b : blocks) {
+            if (b.relX() == rx && b.relZ() == rz && b.relY() == 1) {
+                if (b.state().getBlock() instanceof BaseRailBlock) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public boolean isRailUnderCart(AbstractMinecart cart) {
+        BlockPos anchor = this.getFloorAnchorPos();
+        return isRailAtRelative(cart.getX() - anchor.getX(), cart.getZ() - anchor.getZ());
+    }
+
+    public @Nullable CarriedMinecartInfo getCarriedCartInfo(UUID uuid) {
+        return this.carriedCarts.get(uuid);
+    }
+
+    private void scanAndCaptureMinecarts(BlockPos floorAnchor, int startY) {
+        this.carriedCarts.clear();
+        double boxMinX = floorAnchor.getX() + minRelX;
+        double boxMaxX = floorAnchor.getX() + maxRelX + 1.0;
+        double boxMinZ = floorAnchor.getZ() + minRelZ;
+        double boxMaxZ = floorAnchor.getZ() + maxRelZ + 1.0;
+
+        AABB queryBox = new AABB(
+                boxMinX - 0.2, startY + 0.5, boxMinZ - 0.2,
+                boxMaxX + 0.2, startY + 2.5, boxMaxZ + 0.2
+        );
+
+        List<AbstractMinecart> carts = this.level().getEntitiesOfClass(
+                AbstractMinecart.class,
+                queryBox,
+                c -> c.isAlive()
+        );
+
+        for (AbstractMinecart cart : carts) {
+            double relX = cart.getX() - floorAnchor.getX();
+            double relZ = cart.getZ() - floorAnchor.getZ();
+            Vec3 vel = cart.getDeltaMovement();
+            boolean hasRail = isRailAtRelative(relX, relZ);
+            this.carriedCarts.put(cart.getUUID(), new CarriedMinecartInfo(
+                    cart.getUUID(),
+                    relX,
+                    relZ,
+                    cart.getYRot(),
+                    vel.x,
+                    vel.z,
+                    hasRail
+            ));
+        }
     }
 
     public BlockPos getAnchorRailPos() {
@@ -319,21 +417,93 @@ public class IndustrialElevatorCarriageEntity extends Entity {
     ) {
         double oldFloorSurfaceY = oldY + 1.0;
         double newFloorSurfaceY = newY + 1.0;
+        BlockPos anchor = this.getFloorAnchorPos();
 
         // Expanded query box to detect entities standing on or near the moving platform
         AABB searchBox = new AABB(
-                minX - 0.1,
+                minX - 0.2,
                 Math.min(oldY, newY) - 0.5,
-                minZ - 0.1,
-                maxX + 0.1,
+                minZ - 0.2,
+                maxX + 0.2,
                 Math.max(oldY, newY) + 3.0,
-                maxZ + 0.1
+                maxZ + 0.2
         );
 
-        List<Entity> riders = this.level().getEntities(this, searchBox, e -> e.isAlive() && !e.isPassenger());
+        // 1. Process AbstractMinecart / Locomotives
+        List<AbstractMinecart> foundCarts = this.level().getEntitiesOfClass(
+                AbstractMinecart.class,
+                searchBox,
+                c -> c.isAlive()
+        );
+        for (AbstractMinecart cart : foundCarts) {
+            AABB cb = cart.getBoundingBox();
+            if (cb.maxX <= minX || cb.minX >= maxX || cb.maxZ <= minZ || cb.minZ >= maxZ) {
+                continue;
+            }
+            if (!this.carriedCarts.containsKey(cart.getUUID())) {
+                double relX = cart.getX() - anchor.getX();
+                double relZ = cart.getZ() - anchor.getZ();
+                Vec3 vel = cart.getDeltaMovement();
+                boolean hasRail = isRailAtRelative(relX, relZ);
+                this.carriedCarts.put(cart.getUUID(), new CarriedMinecartInfo(
+                        cart.getUUID(),
+                        relX,
+                        relZ,
+                        cart.getYRot(),
+                        vel.x,
+                        vel.z,
+                        hasRail
+                ));
+            }
+        }
+
+        // Lock position & sync vertical movement for all carried minecarts / locomotives
+        for (CarriedMinecartInfo info : this.carriedCarts.values()) {
+            Entity entity = null;
+            if (this.level() instanceof ServerLevel sl) {
+                entity = sl.getEntity(info.uuid);
+            } else {
+                for (AbstractMinecart c : foundCarts) {
+                    if (c.getUUID().equals(info.uuid)) {
+                        entity = c;
+                        break;
+                    }
+                }
+            }
+
+            if (entity instanceof AbstractMinecart cart && cart.isAlive()) {
+                double targetX = anchor.getX() + info.relX;
+                double targetZ = anchor.getZ() + info.relZ;
+                double targetY = newFloorSurfaceY + (info.hasRail ? 0.0625 : 0.0);
+                double oldCartY = oldFloorSurfaceY + (info.hasRail ? 0.0625 : 0.0);
+
+                cart.setPos(targetX, targetY, targetZ);
+                cart.yo = oldCartY;
+                cart.yOld = oldCartY;
+                cart.xo = targetX;
+                cart.xOld = targetX;
+                cart.zo = targetZ;
+                cart.zOld = targetZ;
+                cart.setYRot(info.yRot);
+                cart.yRotO = info.yRot;
+                cart.setDeltaMovement(0.0, step, 0.0);
+                cart.fallDistance = 0.0F;
+                cart.setOnGround(true);
+
+                // Sync vertical camera & interpolation for passengers riding inside this cart
+                for (Entity passenger : cart.getPassengers()) {
+                    passenger.fallDistance = 0.0F;
+                    passenger.setOnGround(true);
+                    passenger.yo = passenger.getY() - step;
+                    passenger.yOld = passenger.getY() - step;
+                }
+            }
+        }
+
+        // 2. Process other entities (Players and mobs not in vehicles)
+        List<Entity> riders = this.level().getEntities(this, searchBox, e -> e.isAlive() && !e.isPassenger() && !(e instanceof AbstractMinecart));
         for (Entity e : riders) {
             AABB eb = e.getBoundingBox();
-            // Verify horizontal overlap with platform
             if (eb.maxX <= minX || eb.minX >= maxX || eb.maxZ <= minZ || eb.minZ >= maxZ) {
                 continue;
             }
@@ -342,16 +512,11 @@ public class IndustrialElevatorCarriageEntity extends Entity {
             boolean shouldCarry = false;
 
             if (step > 0) {
-                // Moving UP:
-                // Carry if entity was on the floor before this step or is being penetrated by the rising floor
                 if (entityY >= oldFloorSurfaceY - 0.5 && entityY <= newFloorSurfaceY + 0.1) {
                     shouldCarry = true;
                 }
             } else {
-                // Moving DOWN:
-                // Any entity on the platform between the moving floor and 1.5 blocks above it
                 if (entityY >= newFloorSurfaceY - 0.5 && entityY <= oldFloorSurfaceY + 1.5) {
-                    // If entity is deliberately jumping upwards with strong velocity, let them jump
                     if (e.getDeltaMovement().y > 0.15 && entityY > newFloorSurfaceY + 0.1) {
                         shouldCarry = false;
                     } else {
@@ -361,22 +526,17 @@ public class IndustrialElevatorCarriageEntity extends Entity {
             }
 
             if (shouldCarry) {
-                // Keep entity resting exactly on top of the solid floor
                 double targetY = newFloorSurfaceY;
-
-                // Move entity directly to the floor surface without double-stepping or teleport feedback loops
                 e.setPos(e.getX(), targetY, e.getZ());
                 e.yo = oldFloorSurfaceY;
                 e.yOld = oldFloorSurfaceY;
 
-                // Match vertical velocity to platform movement so physics doesn't lag behind
                 Vec3 vel = e.getDeltaMovement();
                 double newVelY = step < 0 ? step : Math.max(vel.y, 0.0);
                 e.setDeltaMovement(vel.x, newVelY, vel.z);
                 e.fallDistance = 0.0F;
                 e.setOnGround(true);
 
-                // Corrective resync only if ServerPlayer suffers massive desync (> 1.5 blocks)
                 if (!this.level().isClientSide() && e instanceof ServerPlayer sp) {
                     if (Math.abs(sp.getY() - targetY) > 1.5) {
                         sp.teleportTo((ServerLevel) sp.level(), sp.getX(), targetY, sp.getZ(), Relative.ROTATION, 0.0F, 0.0F, true);
@@ -415,32 +575,80 @@ public class IndustrialElevatorCarriageEntity extends Entity {
     private void finishDocking(int finalY) {
         BlockPos railPos = this.getAnchorRailPos();
         BlockPos floorAnchor = this.getFloorAnchorPos();
+        List<ElevatorShaftHelper.CapturedBlockEntry> blocksToPlace = this.serverCapturedBlocks.isEmpty() ? this.parsedBlocks : this.serverCapturedBlocks;
 
         // Ensure finalY is on the Guide Rail and does not overwrite solid world blocks
-        if (!ElevatorShaftHelper.canPlatformOccupyY(this.level(), railPos, floorAnchor, this.parsedBlocks, finalY)) {
-            if (ElevatorShaftHelper.canPlatformOccupyY(this.level(), railPos, floorAnchor, this.parsedBlocks, finalY + 1)) {
+        if (!ElevatorShaftHelper.canPlatformOccupyY(this.level(), railPos, floorAnchor, blocksToPlace, finalY)) {
+            if (ElevatorShaftHelper.canPlatformOccupyY(this.level(), railPos, floorAnchor, blocksToPlace, finalY + 1)) {
                 finalY = finalY + 1;
-            } else if (ElevatorShaftHelper.canPlatformOccupyY(this.level(), railPos, floorAnchor, this.parsedBlocks, finalY - 1)) {
+            } else if (ElevatorShaftHelper.canPlatformOccupyY(this.level(), railPos, floorAnchor, blocksToPlace, finalY - 1)) {
                 finalY = finalY - 1;
             }
         }
 
         BlockPos newAnchor = new BlockPos(floorAnchor.getX(), finalY, floorAnchor.getZ());
 
-        // Restore all captured blocks back to the world without overwriting non-replaceable solid world blocks
-        for (ElevatorShaftHelper.CapturedBlockEntry entry : this.parsedBlocks) {
-            BlockPos targetPos = newAnchor.offset(entry.relX(), entry.relY(), entry.relZ());
-            if (ElevatorShaftHelper.isElevatorOrReplaceable(this.level().getBlockState(targetPos))) {
-                this.level().setBlock(targetPos, entry.state(), 3);
+        // Pass 1: Restore relY == 0 floor blocks FIRST
+        for (ElevatorShaftHelper.CapturedBlockEntry entry : blocksToPlace) {
+            if (entry.relY() == 0) {
+                BlockPos targetPos = newAnchor.offset(entry.relX(), 0, entry.relZ());
+                if (ElevatorShaftHelper.isElevatorOrReplaceable(this.level().getBlockState(targetPos))) {
+                    this.level().setBlock(targetPos, entry.state(), 3);
+                }
             }
         }
 
-        // Lift entities safely onto the placed floor surface
+        // Pass 2: Restore relY == 1 surface blocks, rails, and accessories SECOND (with BlockEntity NBT)
+        for (ElevatorShaftHelper.CapturedBlockEntry entry : blocksToPlace) {
+            if (entry.relY() == 1) {
+                BlockPos targetPos = newAnchor.offset(entry.relX(), 1, entry.relZ());
+                BlockState existing = this.level().getBlockState(targetPos);
+                if (existing.isAir() || existing.canBeReplaced() || ElevatorShaftHelper.isElevatorOrReplaceable(existing)) {
+                    this.level().setBlock(targetPos, entry.state(), 3);
+                    if (entry.nbt() != null) {
+                        BlockEntity be = this.level().getBlockEntity(targetPos);
+                        if (be != null) {
+                            be.loadCustomOnly(TagValueInput.create(ProblemReporter.DISCARDING, this.level().registryAccess(), entry.nbt()));
+                            be.setChanged();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 3: Re-evaluate and reconnect platform rails & adjacent floor rails
+        ElevatorShaftHelper.reconnectPlatformRails(this.level(), newAnchor, blocksToPlace);
+
+        // Pass 4: Restore carried minecarts and locomotives onto the rails
+        for (CarriedMinecartInfo info : this.carriedCarts.values()) {
+            Entity entity = this.level() instanceof ServerLevel sl ? sl.getEntity(info.uuid) : null;
+            if (entity instanceof AbstractMinecart cart && cart.isAlive()) {
+                double finalCartX = newAnchor.getX() + info.relX;
+                double finalCartZ = newAnchor.getZ() + info.relZ;
+                double finalCartY = finalY + 1.0 + (info.hasRail ? 0.0625 : 0.0);
+
+                cart.setPos(finalCartX, finalCartY, finalCartZ);
+                cart.yo = finalCartY;
+                cart.yOld = finalCartY;
+                cart.xo = finalCartX;
+                cart.xOld = finalCartX;
+                cart.zo = finalCartZ;
+                cart.zOld = finalCartZ;
+                cart.setYRot(info.yRot);
+                cart.yRotO = info.yRot;
+                cart.setOnRails(info.hasRail);
+                cart.setDeltaMovement(info.velX, 0.0, info.velZ);
+                cart.fallDistance = 0.0F;
+                cart.setOnGround(true);
+            }
+        }
+
+        // Pass 5: Lift standing entities safely onto the placed floor surface
         AABB finalPlatformBox = new AABB(
                 newAnchor.getX() + minRelX - 0.1, finalY - 0.2, newAnchor.getZ() + minRelZ - 0.1,
                 newAnchor.getX() + maxRelX + 1.1, finalY + 3.0, newAnchor.getZ() + maxRelZ + 1.1
         );
-        List<Entity> riders = this.level().getEntities(this, finalPlatformBox, e -> e.isAlive() && !e.isPassenger());
+        List<Entity> riders = this.level().getEntities(this, finalPlatformBox, e -> e.isAlive() && !e.isPassenger() && !(e instanceof AbstractMinecart));
         for (Entity e : riders) {
             if (!this.level().isClientSide() && e instanceof ServerPlayer sp) {
                 sp.teleportTo((ServerLevel) sp.level(), sp.getX(), finalY + 1.0, sp.getZ(), Relative.ROTATION, 0.0F, 0.0F, true);
@@ -455,7 +663,7 @@ public class IndustrialElevatorCarriageEntity extends Entity {
             e.setOnGround(true);
         }
 
-        // Set DOCKED state on any station within 2 blocks of the outside perimeter of the floor
+        // Pass 6: Set DOCKED state on any station within 2 blocks of the outside perimeter of the floor
         int stationMinX = newAnchor.getX() + minRelX - 2;
         int stationMaxX = newAnchor.getX() + maxRelX + 2;
         int stationMinZ = newAnchor.getZ() + minRelZ - 2;
@@ -498,6 +706,41 @@ public class IndustrialElevatorCarriageEntity extends Entity {
         this.entityData.set(DATA_START_Y, input.getIntOr("StartY", 0));
         this.entityData.set(DATA_BLOCKS, input.getStringOr("Blocks", ""));
 
+        this.serverCapturedBlocks.clear();
+        int blockCount = input.getIntOr("ServerBlockCount", 0);
+        for (int i = 0; i < blockCount; i++) {
+            int rx = input.getIntOr("SB_rx_" + i, 0);
+            int ry = input.getIntOr("SB_ry_" + i, 0);
+            int rz = input.getIntOr("SB_rz_" + i, 0);
+            int stId = input.getIntOr("SB_st_" + i, 0);
+            String nbtStr = input.getStringOr("SB_nb_" + i, "");
+            CompoundTag nbt = null;
+            if (!nbtStr.isEmpty()) {
+                try {
+                    nbt = TagParser.parseCompoundFully(nbtStr);
+                } catch (CommandSyntaxException ignored) {}
+            }
+            this.serverCapturedBlocks.add(new ElevatorShaftHelper.CapturedBlockEntry(rx, ry, rz, Block.stateById(stId), nbt));
+        }
+
+        this.carriedCarts.clear();
+        int cartCount = input.getIntOr("CarriedCartCount", 0);
+        for (int i = 0; i < cartCount; i++) {
+            String uuidStr = input.getStringOr("Cart_uuid_" + i, "");
+            if (!uuidStr.isEmpty()) {
+                try {
+                    UUID uuid = UUID.fromString(uuidStr);
+                    double relX = input.getDoubleOr("Cart_rx_" + i, 0.0);
+                    double relZ = input.getDoubleOr("Cart_rz_" + i, 0.0);
+                    float yRot = input.getFloatOr("Cart_rot_" + i, 0.0F);
+                    double vx = input.getDoubleOr("Cart_vx_" + i, 0.0);
+                    double vz = input.getDoubleOr("Cart_vz_" + i, 0.0);
+                    boolean hr = input.getBooleanOr("Cart_hr_" + i, false);
+                    this.carriedCarts.put(uuid, new CarriedMinecartInfo(uuid, relX, relZ, yRot, vx, vz, hr));
+                } catch (IllegalArgumentException ignored) {}
+            }
+        }
+
         this.refreshParsedBlocks();
     }
 
@@ -516,5 +759,30 @@ public class IndustrialElevatorCarriageEntity extends Entity {
         output.putInt("TargetY", this.getTargetY());
         output.putInt("StartY", this.entityData.get(DATA_START_Y));
         output.putString("Blocks", this.entityData.get(DATA_BLOCKS));
+
+        output.putInt("ServerBlockCount", this.serverCapturedBlocks.size());
+        for (int i = 0; i < this.serverCapturedBlocks.size(); i++) {
+            ElevatorShaftHelper.CapturedBlockEntry b = this.serverCapturedBlocks.get(i);
+            output.putInt("SB_rx_" + i, b.relX());
+            output.putInt("SB_ry_" + i, b.relY());
+            output.putInt("SB_rz_" + i, b.relZ());
+            output.putInt("SB_st_" + i, Block.getId(b.state()));
+            if (b.nbt() != null) {
+                output.putString("SB_nb_" + i, b.nbt().toString());
+            }
+        }
+
+        output.putInt("CarriedCartCount", this.carriedCarts.size());
+        int cartIdx = 0;
+        for (CarriedMinecartInfo info : this.carriedCarts.values()) {
+            output.putString("Cart_uuid_" + cartIdx, info.uuid.toString());
+            output.putDouble("Cart_rx_" + cartIdx, info.relX);
+            output.putDouble("Cart_rz_" + cartIdx, info.relZ);
+            output.putFloat("Cart_rot_" + cartIdx, info.yRot);
+            output.putDouble("Cart_vx_" + cartIdx, info.velX);
+            output.putDouble("Cart_vz_" + cartIdx, info.velZ);
+            output.putBoolean("Cart_hr_" + cartIdx, info.hasRail);
+            cartIdx++;
+        }
     }
 }

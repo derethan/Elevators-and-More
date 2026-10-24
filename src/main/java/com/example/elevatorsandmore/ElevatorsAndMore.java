@@ -18,6 +18,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.entity.vehicle.minecart.AbstractMinecart;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
@@ -34,6 +35,7 @@ import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
@@ -208,6 +210,17 @@ public class ElevatorsAndMore {
             player.fallDistance = 0.0F;
             player.setOnGround(true);
 
+            // If player is riding inside a vehicle (e.g. minecart or locomotive),
+            // do NOT override their position! The vehicle manages their position.
+            if (player.isPassenger()) {
+                if (carriage.getLastMovedGameTime() == player.level().getGameTime()) {
+                    double step = carriage.getLastStep();
+                    player.yo = player.getY() - step;
+                    player.yOld = player.getY() - step;
+                }
+                return;
+            }
+
             // If the carriage ticked BEFORE the player in this game tick, Player.commonTick()/baseTick()
             // overwrote player.yo and player.yOld to player.getY(). Restore exact sub-tick interpolation
             // fields (yo for Camera, yOld for EntityRenderer) unless the player is jumping upward.
@@ -217,6 +230,28 @@ public class ElevatorsAndMore {
                 player.setPos(player.getX(), targetY, player.getZ());
                 player.yo = oldY;
                 player.yOld = oldY;
+            }
+        }
+    }
+
+    @SubscribeEvent
+    public void onEntityPreTick(EntityTickEvent.Pre event) {
+        if (event.getEntity() instanceof AbstractMinecart cart) {
+            IndustrialElevatorCarriageEntity carriage = IndustrialElevatorCarriageEntity.getCarriageBeneath(cart);
+            if (carriage != null) {
+                cart.fallDistance = 0.0F;
+                cart.setOnGround(true);
+            }
+        }
+    }
+
+    @SubscribeEvent
+    public void onEntityPostTick(EntityTickEvent.Post event) {
+        if (event.getEntity() instanceof AbstractMinecart cart) {
+            IndustrialElevatorCarriageEntity carriage = IndustrialElevatorCarriageEntity.getCarriageBeneath(cart);
+            if (carriage != null) {
+                cart.fallDistance = 0.0F;
+                cart.setOnGround(true);
             }
         }
     }

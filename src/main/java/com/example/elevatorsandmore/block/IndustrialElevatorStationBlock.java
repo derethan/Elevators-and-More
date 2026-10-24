@@ -8,6 +8,7 @@ import com.example.elevatorsandmore.util.ElevatorShaftHelper;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -25,6 +26,7 @@ import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
+import net.minecraft.world.level.redstone.Orientation;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -91,19 +93,56 @@ public class IndustrialElevatorStationBlock extends Block implements EntityBlock
         return InteractionResult.SUCCESS;
     }
 
-    @Override
-    protected boolean isSignalSource(BlockState state) {
-        return true;
+    public static boolean isStationReceivingRedstone(Level level, BlockPos pos, BlockState state) {
+        // 1. Direct signal to the Control Board
+        if (level.hasNeighborSignal(pos)) {
+            return true;
+        }
+        // 2. Signal through the wall block it is mounted on
+        if (state.hasProperty(FACING)) {
+            Direction wallDir = state.getValue(FACING).getOpposite();
+            BlockPos wallPos = pos.relative(wallDir);
+            if (level.hasNeighborSignal(wallPos)) {
+                return true;
+            }
+        }
+        // 3. Signal to the floor block directly beneath or 2 below
+        if (level.hasNeighborSignal(pos.below()) || level.hasNeighborSignal(pos.below(2))) {
+            return true;
+        }
+        return false;
+    }
+
+    private void checkRedstoneCall(Level level, BlockPos pos, BlockState state) {
+        BlockEntity be = level.getBlockEntity(pos);
+        if (!(be instanceof IndustrialElevatorStationBlockEntity stationBE)) {
+            return;
+        }
+        boolean isReceiving = isStationReceivingRedstone(level, pos, state);
+        boolean wasPowered = stationBE.isRedstonePowered();
+
+        if (isReceiving != wasPowered) {
+            stationBE.setRedstonePowered(isReceiving);
+            if (isReceiving && level instanceof ServerLevel serverLevel) {
+                ElevatorShaftHelper.callElevatorToStation(serverLevel, pos);
+            }
+        }
     }
 
     @Override
-    protected int getSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
-        return state.getValue(DOCKED) ? 15 : 0;
+    protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, @Nullable Orientation orientation, boolean movedByPiston) {
+        super.neighborChanged(state, level, pos, neighborBlock, orientation, movedByPiston);
+        if (!level.isClientSide()) {
+            checkRedstoneCall(level, pos, state);
+        }
     }
 
     @Override
-    protected int getDirectSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
-        return state.getValue(DOCKED) ? 15 : 0;
+    protected void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean movedByPiston) {
+        super.onPlace(state, level, pos, oldState, movedByPiston);
+        if (!level.isClientSide() && !state.is(oldState.getBlock())) {
+            checkRedstoneCall(level, pos, state);
+        }
     }
 
     @Override

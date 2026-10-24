@@ -432,13 +432,15 @@ public class IndustrialElevatorCarriageEntity extends Entity {
             e.setOnGround(true);
         }
 
-        // Set DOCKED state on any adjacent station for this final floor
-        int railX = railPos.getX();
-        int railZ = railPos.getZ();
+        // Set DOCKED state on any station within 2 blocks of the outside perimeter of the floor
+        int stationMinX = newAnchor.getX() + minRelX - 2;
+        int stationMaxX = newAnchor.getX() + maxRelX + 2;
+        int stationMinZ = newAnchor.getZ() + minRelZ - 2;
+        int stationMaxZ = newAnchor.getZ() + maxRelZ + 2;
         for (int checkY = finalY; checkY <= finalY + 3; checkY++) {
-            for (int dx = -4; dx <= 4; dx++) {
-                for (int dz = -4; dz <= 4; dz++) {
-                    BlockPos candidate = new BlockPos(railX + dx, checkY, railZ + dz);
+            for (int sx = stationMinX; sx <= stationMaxX; sx++) {
+                for (int sz = stationMinZ; sz <= stationMaxZ; sz++) {
+                    BlockPos candidate = new BlockPos(sx, checkY, sz);
                     BlockState st = this.level().getBlockState(candidate);
                     if (st.hasProperty(IndustrialElevatorStationBlock.DOCKED)) {
                         int stationFloorY = ElevatorShaftHelper.resolveStationFloorY(this.level(), railPos, candidate);

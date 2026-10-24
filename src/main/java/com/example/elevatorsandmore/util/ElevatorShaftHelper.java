@@ -41,10 +41,16 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public class ElevatorShaftHelper {
 
     public record DiscoveredStation(BlockPos pos, IndustrialElevatorStationBlockEntity entity, int floorY) {}
+    public record PlatformBounds(int minX, int maxX, int minZ, int maxZ) {
+        public boolean isWithinPerimeter(BlockPos pos, int margin) {
+            return pos.getX() >= minX - margin && pos.getX() <= maxX + margin
+                    && pos.getZ() >= minZ - margin && pos.getZ() <= maxZ + margin;
+        }
+    }
 
     /**
      * Finds the guide rail column associated with an origin (station, pedestal, or floor block).
-     * Searches adjacent blocks, nearby blocks (up to 4 blocks), or flood-fills across connected elevator floor blocks.
+     * Determines the elevator platform footprint and connects if within 2 blocks of the perimeter.
      */
     public static @Nullable BlockPos findAdjacentRail(Level level, BlockPos origin) {
         if (level.getBlockState(origin).getBlock() instanceof IndustrialGuideRailBlock) {
@@ -90,14 +96,71 @@ public class ElevatorShaftHelper {
             }
         }
 
-        // Horizontal box search around origin within 4 blocks horizontally and 2 blocks vertically
-        for (int dx = -4; dx <= 4; dx++) {
-            for (int dz = -4; dz <= 4; dz++) {
-                for (int dy = -2; dy <= 2; dy++) {
+        // Search for guide rails whose platform perimeter encompasses origin (within 2 blocks of perimeter)
+        int maxReach = Config.MAX_HORIZONTAL_SPAN.get() + 3;
+        BlockPos bestRail = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (int dx = -maxReach; dx <= maxReach; dx++) {
+            for (int dz = -maxReach; dz <= maxReach; dz++) {
+                for (int dy = -3; dy <= 3; dy++) {
                     BlockPos candidate = origin.offset(dx, dy, dz);
                     if (level.getBlockState(candidate).getBlock() instanceof IndustrialGuideRailBlock) {
-                        return candidate;
+                        PlatformBounds bounds = getPlatformBounds(level, candidate);
+                        if (bounds != null && bounds.isWithinPerimeter(origin, 2)) {
+                            return candidate;
+                        }
+                        double d = origin.distSqr(candidate);
+                        if (d < bestDistSq) {
+                            bestDistSq = d;
+                            bestRail = candidate;
+                        }
                     }
+                }
+            }
+        }
+
+        return bestRail;
+    }
+
+    /**
+     * Determines the horizontal bounding footprint of the elevator platform associated with railPos.
+     */
+    public static @Nullable PlatformBounds getPlatformBounds(Level level, BlockPos railPos) {
+        IndustrialElevatorCarriageEntity carriage = findMovingCarriage(level, railPos);
+        if (carriage != null) {
+            BlockPos anchor = carriage.getFloorAnchorPos();
+            if (!anchor.equals(BlockPos.ZERO)) {
+                return new PlatformBounds(
+                        anchor.getX() + carriage.getMinRelX(),
+                        anchor.getX() + carriage.getMaxRelX(),
+                        anchor.getZ() + carriage.getMinRelZ(),
+                        anchor.getZ() + carriage.getMaxRelZ()
+                );
+            }
+        }
+
+        Integer currentPlatY = findCurrentPlatformY(level, railPos);
+        if (currentPlatY != null) {
+            BlockPos floorAnchor = findFloorAnchor(level, railPos, currentPlatY);
+            if (floorAnchor != null) {
+                List<CapturedBlockEntry> blocks = gatherPlatformBlocks(level, railPos, currentPlatY);
+                if (!blocks.isEmpty()) {
+                    int minX = floorAnchor.getX();
+                    int maxX = floorAnchor.getX();
+                    int minZ = floorAnchor.getZ();
+                    int maxZ = floorAnchor.getZ();
+                    for (CapturedBlockEntry b : blocks) {
+                        if (b.relY() == 0) {
+                            int bx = floorAnchor.getX() + b.relX();
+                            int bz = floorAnchor.getZ() + b.relZ();
+                            if (bx < minX) minX = bx;
+                            if (bx > maxX) maxX = bx;
+                            if (bz < minZ) minZ = bz;
+                            if (bz > maxZ) maxZ = bz;
+                        }
+                    }
+                    return new PlatformBounds(minX, maxX, minZ, maxZ);
                 }
             }
         }
@@ -106,7 +169,8 @@ public class ElevatorShaftHelper {
     }
 
     /**
-     * Scans the vertical guide rail column and finds all elevator stations within 4 blocks horizontally.
+     * Scans the vertical guide rail column and finds all elevator stations within 2 blocks
+     * of the outside perimeter of the elevator floor.
      */
     public static List<DiscoveredStation> findStationsAlongRail(Level level, BlockPos railPos) {
         List<DiscoveredStation> stations = new ArrayList<>();
@@ -121,6 +185,12 @@ public class ElevatorShaftHelper {
         int railX = railPos.getX();
         int railZ = railPos.getZ();
 
+        PlatformBounds bounds = getPlatformBounds(level, railPos);
+        int minX = bounds != null ? bounds.minX() - 2 : railX - 4;
+        int maxX = bounds != null ? bounds.maxX() + 2 : railX + 4;
+        int minZ = bounds != null ? bounds.minZ() - 2 : railZ - 4;
+        int maxZ = bounds != null ? bounds.maxZ() + 2 : railZ + 4;
+
         Set<BlockPos> foundPositions = new HashSet<>();
 
         for (int y = minSearchY; y <= maxSearchY; y++) {
@@ -129,12 +199,12 @@ public class ElevatorShaftHelper {
                 continue;
             }
 
-            // Search in a 4x4 horizontal radius around the rail (and up to 2 blocks above the top rail) for stations
+            // Search within 2 blocks of the outside perimeter of the elevator floor (and up to 2 blocks above the rail)
             for (int dy = 0; dy <= 2; dy++) {
                 int stationY = y + dy;
-                for (int dx = -4; dx <= 4; dx++) {
-                    for (int dz = -4; dz <= 4; dz++) {
-                        BlockPos stationCandidate = new BlockPos(railX + dx, stationY, railZ + dz);
+                for (int sx = minX; sx <= maxX; sx++) {
+                    for (int sz = minZ; sz <= maxZ; sz++) {
+                        BlockPos stationCandidate = new BlockPos(sx, stationY, sz);
                         if (foundPositions.contains(stationCandidate)) continue;
 
                         BlockEntity be = level.getBlockEntity(stationCandidate);

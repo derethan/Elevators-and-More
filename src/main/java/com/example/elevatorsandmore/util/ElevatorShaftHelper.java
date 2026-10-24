@@ -98,8 +98,6 @@ public class ElevatorShaftHelper {
 
         // Search for guide rails whose platform perimeter encompasses origin (within 2 blocks of perimeter)
         int maxReach = Config.MAX_HORIZONTAL_SPAN.get() + 3;
-        BlockPos bestRail = null;
-        double bestDistSq = Double.MAX_VALUE;
 
         for (int dx = -maxReach; dx <= maxReach; dx++) {
             for (int dz = -maxReach; dz <= maxReach; dz++) {
@@ -107,20 +105,22 @@ public class ElevatorShaftHelper {
                     BlockPos candidate = origin.offset(dx, dy, dz);
                     if (level.getBlockState(candidate).getBlock() instanceof IndustrialGuideRailBlock) {
                         PlatformBounds bounds = getPlatformBounds(level, candidate);
-                        if (bounds != null && bounds.isWithinPerimeter(origin, 2)) {
-                            return candidate;
-                        }
-                        double d = origin.distSqr(candidate);
-                        if (d < bestDistSq) {
-                            bestDistSq = d;
-                            bestRail = candidate;
+                        if (bounds != null) {
+                            if (bounds.isWithinPerimeter(origin, 2)) {
+                                return candidate;
+                            }
+                        } else {
+                            // If no platform has been placed yet, only permit within 2 blocks of the rail itself
+                            if (Math.abs(origin.getX() - candidate.getX()) <= 2 && Math.abs(origin.getZ() - candidate.getZ()) <= 2) {
+                                return candidate;
+                            }
                         }
                     }
                 }
             }
         }
 
-        return bestRail;
+        return null;
     }
 
     /**

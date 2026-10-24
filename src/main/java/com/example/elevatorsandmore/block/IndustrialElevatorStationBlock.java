@@ -7,6 +7,7 @@ import com.example.elevatorsandmore.util.ElevatorShaftHelper;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -56,7 +57,17 @@ public class IndustrialElevatorStationBlock extends Block implements EntityBlock
     }
 
     @Override
-    public BlockState getStateForPlacement(BlockPlaceContext context) {
+    public @Nullable BlockState getStateForPlacement(BlockPlaceContext context) {
+        Level level = context.getLevel();
+        BlockPos pos = context.getClickedPos();
+        BlockPos railPos = ElevatorShaftHelper.findAdjacentRail(level, pos);
+        if (railPos == null) {
+            if (!level.isClientSide() && context.getPlayer() != null) {
+                context.getPlayer().sendSystemMessage(Component.literal("§c[Elevators & More] Cannot place Elevator Control Board here! It must be within 2 blocks of the outside perimeter of an elevator floor."));
+            }
+            return null;
+        }
+
         Direction clickedFace = context.getClickedFace();
         Direction facing;
         if (clickedFace.getAxis().isHorizontal()) {
@@ -70,6 +81,11 @@ public class IndustrialElevatorStationBlock extends Block implements EntityBlock
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
+            BlockPos rail = ElevatorShaftHelper.findAdjacentRail(level, pos);
+            if (rail == null) {
+                serverPlayer.sendSystemMessage(Component.literal("§c[Elevators & More] This Control Board is too far from an elevator floor! It must be within 2 blocks of the elevator floor perimeter."));
+                return InteractionResult.CONSUME;
+            }
             ElevatorShaftHelper.openElevatorGuiFromStation(level, pos, serverPlayer);
         }
         return InteractionResult.SUCCESS;

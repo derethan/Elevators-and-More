@@ -6,6 +6,7 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 import com.example.elevatorsandmore.Config;
+import com.example.elevatorsandmore.block.IndustrialControlPedestalBlock;
 import com.example.elevatorsandmore.block.IndustrialElevatorStationBlock;
 import com.example.elevatorsandmore.util.ElevatorShaftHelper;
 
@@ -216,9 +217,28 @@ public class IndustrialElevatorCarriageEntity extends Entity {
     @Override
     public InteractionResult interact(Player player, InteractionHand hand, Vec3 location) {
         if (!this.level().isClientSide() && player instanceof ServerPlayer serverPlayer) {
-            ElevatorShaftHelper.openElevatorGuiFromPlatform(this.level(), this.blockPosition(), serverPlayer);
+            // Only allow opening the GUI on a moving platform by right-clicking the Elevator Control Pedestal
+            BlockPos anchor = this.getFloorAnchorPos();
+            boolean clickedPedestal = false;
+            for (ElevatorShaftHelper.CapturedBlockEntry entry : this.parsedBlocks) {
+                if (entry.state().getBlock() instanceof IndustrialControlPedestalBlock) {
+                    BlockPos pedestalPos = new BlockPos(
+                            anchor.getX() + entry.relX(),
+                            (int) Math.round(this.getY()) + entry.relY(),
+                            anchor.getZ() + entry.relZ()
+                    );
+                    if (location.distanceToSqr(Vec3.atCenterOf(pedestalPos)) <= 3.0) {
+                        clickedPedestal = true;
+                        break;
+                    }
+                }
+            }
+            if (clickedPedestal) {
+                ElevatorShaftHelper.openElevatorGuiFromPlatform(this.level(), this.blockPosition(), serverPlayer);
+                return InteractionResult.SUCCESS;
+            }
         }
-        return InteractionResult.SUCCESS;
+        return InteractionResult.PASS;
     }
 
     @Override

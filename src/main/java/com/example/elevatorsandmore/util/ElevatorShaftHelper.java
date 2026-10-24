@@ -129,31 +129,20 @@ public class ElevatorShaftHelper {
                 continue;
             }
 
-            // Search in a 4x4 horizontal radius around the rail for stations
-            for (int dx = -4; dx <= 4; dx++) {
-                for (int dz = -4; dz <= 4; dz++) {
-                    BlockPos stationCandidate = new BlockPos(railX + dx, y, railZ + dz);
-                    if (foundPositions.contains(stationCandidate)) continue;
+            // Search in a 4x4 horizontal radius around the rail (and up to 2 blocks above the top rail) for stations
+            for (int dy = 0; dy <= 2; dy++) {
+                int stationY = y + dy;
+                for (int dx = -4; dx <= 4; dx++) {
+                    for (int dz = -4; dz <= 4; dz++) {
+                        BlockPos stationCandidate = new BlockPos(railX + dx, stationY, railZ + dz);
+                        if (foundPositions.contains(stationCandidate)) continue;
 
-                    BlockEntity be = level.getBlockEntity(stationCandidate);
-                    if (be instanceof IndustrialElevatorStationBlockEntity stationBE) {
-                        foundPositions.add(stationCandidate);
-
-                        // The Elevator Control Board is mounted on the wall with 1 block of space
-                        // between the board and the elevator base (board at Y, floor base at Y-2)
-                        int resolvedFloorY = y - 2;
-                        if (hasFloorNearby(level, railPos, y - 2)) {
-                            resolvedFloorY = y - 2;
-                        } else if (hasFloorNearby(level, railPos, y - 1)) {
-                            resolvedFloorY = y - 1;
-                        } else if (hasFloorNearby(level, railPos, y)) {
-                            resolvedFloorY = y;
-                        } else {
-                            // Default: board at chest/eye level, 1 block space above elevator base -> floor is Y-2
-                            resolvedFloorY = stationCandidate.getY() - 2;
+                        BlockEntity be = level.getBlockEntity(stationCandidate);
+                        if (be instanceof IndustrialElevatorStationBlockEntity stationBE) {
+                            foundPositions.add(stationCandidate);
+                            int resolvedFloorY = resolveStationFloorY(level, railPos, stationCandidate);
+                            stations.add(new DiscoveredStation(stationCandidate, stationBE, resolvedFloorY));
                         }
-
-                        stations.add(new DiscoveredStation(stationCandidate, stationBE, resolvedFloorY));
                     }
                 }
             }
@@ -161,6 +150,100 @@ public class ElevatorShaftHelper {
 
         stations.sort(Comparator.comparingInt(DiscoveredStation::floorY).reversed());
         return stations;
+    }
+
+    public static boolean hasRailAt(Level level, BlockPos railPos, int checkY) {
+        return level.getBlockState(new BlockPos(railPos.getX(), checkY, railPos.getZ())).getBlock() instanceof IndustrialGuideRailBlock;
+    }
+
+    public static boolean isElevatorOrReplaceable(BlockState state) {
+        return state.isAir()
+                || state.canBeReplaced()
+                || state.getBlock() instanceof IndustrialElevatorFloorBlock
+                || state.getBlock() instanceof IndustrialSafetyRailingBlock
+                || state.getBlock() instanceof IndustrialControlPedestalBlock;
+    }
+
+    /**
+     * Checks whether the elevator platform can physically occupy checkY along the guide rail
+     * without going off the guide rail column or colliding with solid ground blocks.
+     */
+    public static boolean isShaftSpaceOpenAt(Level level, BlockPos railPos, int checkY) {
+        if (!hasRailAt(level, railPos, checkY)) {
+            return false;
+        }
+
+        // Check if we know the platform's horizontal anchor position
+        IndustrialElevatorCarriageEntity carriage = findMovingCarriage(level, railPos);
+        if (carriage != null) {
+            BlockPos anchor = carriage.getFloorAnchorPos();
+            if (!anchor.equals(BlockPos.ZERO)) {
+                BlockState atAnchor = level.getBlockState(new BlockPos(anchor.getX(), checkY, anchor.getZ()));
+                return isElevatorOrReplaceable(atAnchor);
+            }
+        }
+
+        Integer currentPlatY = findCurrentPlatformY(level, railPos);
+        if (currentPlatY != null) {
+            BlockPos anchor = findFloorAnchor(level, railPos, currentPlatY);
+            if (anchor != null) {
+                BlockState atAnchor = level.getBlockState(new BlockPos(anchor.getX(), checkY, anchor.getZ()));
+                return isElevatorOrReplaceable(atAnchor);
+            }
+        }
+
+        // Fallback: check the block directly in front of the guide rail at checkY
+        BlockPos railAtY = new BlockPos(railPos.getX(), checkY, railPos.getZ());
+        BlockState railState = level.getBlockState(railAtY);
+        if (railState.hasProperty(IndustrialGuideRailBlock.FACING)) {
+            Direction facing = railState.getValue(IndustrialGuideRailBlock.FACING);
+            BlockState frontState = level.getBlockState(railAtY.relative(facing));
+            return isElevatorOrReplaceable(frontState);
+        }
+
+        return true;
+    }
+
+    /**
+     * Resolves the target floor Y for an Elevator Control Board at stationPos.
+     * Supports both standard mounting (2 blocks above floor = 1 block gap) and bottom/ground-level
+     * mounting (1 block above floor where y-2 is solid ground or below the Guide Rail).
+     */
+    public static int resolveStationFloorY(Level level, BlockPos railPos, BlockPos stationPos) {
+        int y = stationPos.getY();
+
+        // 1. If the elevator floor is currently docked at y-2, y-1, or y (and on the rail), use that exact Y
+        if (hasRailAt(level, railPos, y - 2) && hasFloorNearby(level, railPos, y - 2)) {
+            return y - 2;
+        }
+        if (hasRailAt(level, railPos, y - 1) && hasFloorNearby(level, railPos, y - 1)) {
+            return y - 1;
+        }
+        if (hasRailAt(level, railPos, y) && hasFloorNearby(level, railPos, y)) {
+            return y;
+        }
+
+        // 2. When the elevator is elsewhere in the shaft:
+        // Prefer y - 2 (1 block gap between Control Board and elevator base) ONLY if the Guide Rail
+        // reaches y - 2 AND the shaft space at y - 2 is open (not solid ground)
+        if (isShaftSpaceOpenAt(level, railPos, y - 2)) {
+            return y - 2;
+        }
+
+        // 3. If y - 2 is solid ground or below the Guide Rail (e.g., ground-level caller placed 1 block above the floor),
+        // stop at y - 1 on top of the solid ground and flush with the bottom Guide Rail
+        if (isShaftSpaceOpenAt(level, railPos, y - 1)) {
+            return y - 1;
+        }
+
+        // 4. Fallback to y if open on the rail
+        if (isShaftSpaceOpenAt(level, railPos, y)) {
+            return y;
+        }
+
+        if (hasRailAt(level, railPos, y - 1)) return y - 1;
+        if (hasRailAt(level, railPos, y - 2)) return y - 2;
+        return y;
     }
 
     private static boolean hasFloorNearby(Level level, BlockPos railPos, int checkY) {
@@ -197,15 +280,26 @@ public class ElevatorShaftHelper {
 
         int railX = railPos.getX();
         int railZ = railPos.getZ();
+        Integer lowestRailY = null;
 
         for (int y = minSearchY; y <= maxSearchY; y++) {
             if (!(level.getBlockState(new BlockPos(railX, y, railZ)).getBlock() instanceof IndustrialGuideRailBlock)) {
                 continue;
             }
+            if (lowestRailY == null || y < lowestRailY) {
+                lowestRailY = y;
+            }
             if (hasFloorNearby(level, railPos, y)) {
                 return y;
             }
         }
+
+        // Self-healing fallback: if a platform previously dropped 1 block below the lowest Guide Rail,
+        // still detect it so it can be recovered back onto the rail.
+        if (lowestRailY != null && hasFloorNearby(level, railPos, lowestRailY - 1)) {
+            return lowestRailY - 1;
+        }
+
         return null;
     }
 
@@ -334,17 +428,7 @@ public class ElevatorShaftHelper {
                 startElevator(level, railPos, payload.originPos(), payload.targetY(), player);
             }
             case ElevatorActionPayload.ACTION_CALL -> {
-                // Find floor Y for this station (with 1 block of space between caller and base)
-                int callFloorY = payload.originPos().getY() - 2;
-                if (hasFloorNearby(level, railPos, payload.originPos().getY() - 2)) {
-                    callFloorY = payload.originPos().getY() - 2;
-                } else if (hasFloorNearby(level, railPos, payload.originPos().getY() - 1)) {
-                    callFloorY = payload.originPos().getY() - 1;
-                } else if (hasFloorNearby(level, railPos, payload.originPos().getY())) {
-                    callFloorY = payload.originPos().getY();
-                } else {
-                    callFloorY = payload.originPos().getY() - 2; // Default: 1 block of space between caller and base
-                }
+                int callFloorY = resolveStationFloorY(level, railPos, payload.originPos());
                 startElevator(level, railPos, payload.originPos(), callFloorY, player);
             }
             case ElevatorActionPayload.ACTION_RENAME -> {
@@ -410,6 +494,23 @@ public class ElevatorShaftHelper {
             return false;
         }
 
+        // If targetFloorY is blocked by solid ground or below the Guide Rail (e.g. station 1 block above ground),
+        // adjust up by 1 block if targetFloorY + 1 is on the Guide Rail and unobstructed.
+        if (!canPlatformOccupyY(level, railPos, floorAnchor, blocks, targetFloorY)) {
+            if (canPlatformOccupyY(level, railPos, floorAnchor, blocks, targetFloorY + 1)) {
+                targetFloorY = targetFloorY + 1;
+            } else if (canPlatformOccupyY(level, railPos, floorAnchor, blocks, targetFloorY + 2)) {
+                targetFloorY = targetFloorY + 2;
+            }
+        }
+
+        if (departureY == targetFloorY) {
+            if (initiator != null) {
+                initiator.sendSystemMessage(Component.literal("§7Elevator is already at this floor."));
+            }
+            return false;
+        }
+
         // Spawn carriage entity FIRST so entity collision immediately exists beneath standing entities
         IndustrialElevatorCarriageEntity carriage = new IndustrialElevatorCarriageEntity(
                 ElevatorsAndMore.INDUSTRIAL_ELEVATOR_CARRIAGE_ENTITY.get(),
@@ -448,6 +549,29 @@ public class ElevatorShaftHelper {
         level.playSound(null, floorAnchor, SoundEvents.IRON_TRAPDOOR_OPEN, SoundSource.BLOCKS, 1.0F, 0.8F);
         level.playSound(null, floorAnchor, SoundEvents.PISTON_EXTEND, SoundSource.BLOCKS, 1.0F, 0.9F);
 
+        return true;
+    }
+
+    public static boolean canPlatformOccupyY(
+            Level level,
+            BlockPos railPos,
+            BlockPos floorAnchor,
+            List<CapturedBlockEntry> blocks,
+            int checkY
+    ) {
+        if (!hasRailAt(level, railPos, checkY)) {
+            return false;
+        }
+        BlockPos baseAnchor = new BlockPos(floorAnchor.getX(), checkY, floorAnchor.getZ());
+        for (CapturedBlockEntry entry : blocks) {
+            if (entry.relY() == 0) {
+                BlockPos targetPos = baseAnchor.offset(entry.relX(), 0, entry.relZ());
+                BlockState existing = level.getBlockState(targetPos);
+                if (!isElevatorOrReplaceable(existing)) {
+                    return false;
+                }
+            }
+        }
         return true;
     }
 

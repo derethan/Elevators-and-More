@@ -21,6 +21,7 @@ import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
@@ -33,6 +34,7 @@ import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.registries.DeferredBlock;
@@ -186,5 +188,36 @@ public class ElevatorsAndMore {
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         LOGGER.info("Elevators and More initialized on server.");
+    }
+
+    @SubscribeEvent
+    public void onPlayerPreTick(PlayerTickEvent.Pre event) {
+        Player player = event.getEntity();
+        IndustrialElevatorCarriageEntity carriage = IndustrialElevatorCarriageEntity.getCarriageBeneath(player);
+        if (carriage != null) {
+            player.fallDistance = 0.0F;
+            player.setOnGround(true);
+        }
+    }
+
+    @SubscribeEvent
+    public void onPlayerPostTick(PlayerTickEvent.Post event) {
+        Player player = event.getEntity();
+        IndustrialElevatorCarriageEntity carriage = IndustrialElevatorCarriageEntity.getCarriageBeneath(player);
+        if (carriage != null) {
+            player.fallDistance = 0.0F;
+            player.setOnGround(true);
+
+            // If the carriage ticked BEFORE the player in this game tick, Player.commonTick()/baseTick()
+            // overwrote player.yo and player.yOld to player.getY(). Restore exact sub-tick interpolation
+            // fields (yo for Camera, yOld for EntityRenderer) unless the player is jumping upward.
+            if (carriage.getLastMovedGameTime() == player.level().getGameTime() && player.getDeltaMovement().y <= 0.15) {
+                double targetY = carriage.getY() + 1.0;
+                double oldY = carriage.yo + 1.0;
+                player.setPos(player.getX(), targetY, player.getZ());
+                player.yo = oldY;
+                player.yOld = oldY;
+            }
+        }
     }
 }

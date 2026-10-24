@@ -1,8 +1,8 @@
 {
   "variants": {
-    "facing=north": { "model": "elevatorsandmore:block/industrial_guide_rail", "y": 0 },
-    "facing=east":  { "model": "elevatorsandmore:block/industrial_guide_rail", "y": 90 },
-    "facing=south": { "model": "elevatorsandmore:block/industrial_guide_rail", "y": 180 },
-    "facing=west":  { "model": "elevatorsandmore:block/industrial_guide_rail", "y": 270 }
+    "facing=south": { "model": "elevatorsandmore:block/industrial_guide_rail", "y": 0 },
+    "facing=west":  { "model": "elevatorsandmore:block/industrial_guide_rail", "y": 90 },
+    "facing=north": { "model": "elevatorsandmore:block/industrial_guide_rail", "y": 180 },
+    "facing=east":  { "model": "elevatorsandmore:block/industrial_guide_rail", "y": 270 }
   }
 }

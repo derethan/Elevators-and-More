@@ -21,11 +21,11 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 public class IndustrialGuideRailBlock extends Block {
     public static final EnumProperty<Direction> FACING = BlockStateProperties.HORIZONTAL_FACING;
 
-    // VoxelShapes mounting against wall (FACING is direction rail faces into shaft)
-    private static final VoxelShape SHAPE_NORTH = Block.box(1.0, 0.0, 12.0, 15.0, 16.0, 16.0);
-    private static final VoxelShape SHAPE_SOUTH = Block.box(1.0, 0.0, 0.0, 15.0, 16.0, 4.0);
-    private static final VoxelShape SHAPE_WEST = Block.box(12.0, 0.0, 1.0, 16.0, 16.0, 15.0);
-    private static final VoxelShape SHAPE_EAST = Block.box(0.0, 0.0, 1.0, 4.0, 16.0, 15.0);
+    // VoxelShapes positioned at the face touching the elevator platform
+    private static final VoxelShape SHAPE_SOUTH = Block.box(1.0, 0.0, 12.0, 15.0, 16.0, 16.0);
+    private static final VoxelShape SHAPE_NORTH = Block.box(1.0, 0.0, 0.0, 15.0, 16.0, 4.0);
+    private static final VoxelShape SHAPE_EAST  = Block.box(12.0, 0.0, 1.0, 16.0, 16.0, 15.0);
+    private static final VoxelShape SHAPE_WEST  = Block.box(0.0, 0.0, 1.0, 4.0, 16.0, 15.0);
 
     public IndustrialGuideRailBlock(BlockBehaviour.Properties properties) {
         super(properties);
@@ -44,14 +44,34 @@ public class IndustrialGuideRailBlock extends Block {
 
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
-        Direction clickedFace = context.getClickedFace();
-        Direction facing;
-        if (clickedFace.getAxis().isHorizontal()) {
-            facing = clickedFace;
-        } else {
-            facing = context.getHorizontalDirection().getOpposite();
+        net.minecraft.world.level.Level level = context.getLevel();
+        BlockPos pos = context.getClickedPos();
+
+        // 1. If stacked vertically on or under an existing guide rail, preserve its facing
+        BlockState belowState = level.getBlockState(pos.below());
+        if (belowState.getBlock() instanceof IndustrialGuideRailBlock && belowState.hasProperty(FACING)) {
+            return this.defaultBlockState().setValue(FACING, belowState.getValue(FACING));
         }
-        return this.defaultBlockState().setValue(FACING, facing);
+        BlockState aboveState = level.getBlockState(pos.above());
+        if (aboveState.getBlock() instanceof IndustrialGuideRailBlock && aboveState.hasProperty(FACING)) {
+            return this.defaultBlockState().setValue(FACING, aboveState.getValue(FACING));
+        }
+
+        // 2. If placed adjacent to an elevator floor block, automatically face towards the floor
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+            if (level.getBlockState(pos.relative(dir)).getBlock() instanceof IndustrialElevatorFloorBlock) {
+                return this.defaultBlockState().setValue(FACING, dir);
+            }
+        }
+
+        // 3. If clicked against a wall, face into the shaft away from the wall
+        Direction clickedFace = context.getClickedFace();
+        if (clickedFace.getAxis().isHorizontal()) {
+            return this.defaultBlockState().setValue(FACING, clickedFace);
+        }
+
+        // 4. Default: face towards player
+        return this.defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
     }
 
     @Override

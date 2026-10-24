@@ -1,18 +1,23 @@
 package com.example.elevatorsandmore.block;
 
+import com.example.elevatorsandmore.ElevatorsAndMore;
 import com.example.elevatorsandmore.util.ElevatorShaftHelper;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
+import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
@@ -43,7 +48,37 @@ public class IndustrialControlPedestalBlock extends Block {
 
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
+        // Mount onto an existing Safety Railing block (railing + pedestal share the same block space)
+        BlockState existing = context.getLevel().getBlockState(context.getClickedPos());
+        if (existing.getBlock() instanceof IndustrialSafetyRailingBlock) {
+            return existing.getValue(IndustrialSafetyRailingBlock.PEDESTAL)
+                    ? null
+                    : existing.setValue(IndustrialSafetyRailingBlock.PEDESTAL, true);
+        }
         return this.defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
+    }
+
+    @Override
+    protected boolean canBeReplaced(BlockState state, BlockPlaceContext context) {
+        // A Safety Railing can be added around a standalone pedestal
+        return context.getItemInHand().is(ElevatorsAndMore.INDUSTRIAL_SAFETY_RAILING_ITEM.get());
+    }
+
+    @Override
+    protected InteractionResult useItemOn(
+            ItemStack stack,
+            BlockState state,
+            Level level,
+            BlockPos pos,
+            Player player,
+            InteractionHand hand,
+            BlockHitResult hitResult
+    ) {
+        // Let railing items fall through to normal placement (merging handled by canBeReplaced)
+        if (stack.is(ElevatorsAndMore.INDUSTRIAL_SAFETY_RAILING_ITEM.get())) {
+            return InteractionResult.PASS;
+        }
+        return InteractionResult.TRY_WITH_EMPTY_HAND;
     }
 
     @Override

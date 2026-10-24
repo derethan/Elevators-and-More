@@ -1,8 +1,24 @@
 {
-  "variants": {
-    "facing=north": { "model": "elevatorsandmore:block/industrial_safety_railing", "y": 0 },
-    "facing=east":  { "model": "elevatorsandmore:block/industrial_safety_railing", "y": 90 },
-    "facing=south": { "model": "elevatorsandmore:block/industrial_safety_railing", "y": 180 },
-    "facing=west":  { "model": "elevatorsandmore:block/industrial_safety_railing", "y": 270 }
-  }
+  "multipart": [
+    {
+      "when": { "north": "true" },
+      "apply": { "model": "elevatorsandmore:block/industrial_safety_railing", "y": 0 }
+    },
+    {
+      "when": { "east": "true" },
+      "apply": { "model": "elevatorsandmore:block/industrial_safety_railing", "y": 90 }
+    },
+    {
+      "when": { "south": "true" },
+      "apply": { "model": "elevatorsandmore:block/industrial_safety_railing", "y": 180 }
+    },
+    {
+      "when": { "west": "true" },
+      "apply": { "model": "elevatorsandmore:block/industrial_safety_railing", "y": 270 }
+    },
+    {
+      "when": { "pedestal": "true" },
+      "apply": { "model": "elevatorsandmore:block/industrial_control_pedestal" }
+    }
+  ]
 }

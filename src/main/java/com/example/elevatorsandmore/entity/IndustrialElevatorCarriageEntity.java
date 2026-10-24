@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 import com.example.elevatorsandmore.Config;
 import com.example.elevatorsandmore.block.IndustrialControlPedestalBlock;
 import com.example.elevatorsandmore.block.IndustrialElevatorStationBlock;
+import com.example.elevatorsandmore.block.IndustrialSafetyRailingBlock;
 import com.example.elevatorsandmore.util.ElevatorShaftHelper;
 
 import net.minecraft.core.BlockPos;
@@ -221,7 +222,9 @@ public class IndustrialElevatorCarriageEntity extends Entity {
             BlockPos anchor = this.getFloorAnchorPos();
             boolean clickedPedestal = false;
             for (ElevatorShaftHelper.CapturedBlockEntry entry : this.parsedBlocks) {
-                if (entry.state().getBlock() instanceof IndustrialControlPedestalBlock) {
+                if (entry.state().getBlock() instanceof IndustrialControlPedestalBlock
+                        || (entry.state().getBlock() instanceof IndustrialSafetyRailingBlock
+                            && entry.state().getValue(IndustrialSafetyRailingBlock.PEDESTAL))) {
                     BlockPos pedestalPos = new BlockPos(
                             anchor.getX() + entry.relX(),
                             (int) Math.round(this.getY()) + entry.relY(),

@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "T": "minecraft:redstone_torch",
+    "B": "minecraft:stone_button",
+    "I": "minecraft:iron_ingot"
+  },
+  "pattern": [
+    " I ",
+    "TBT",
+    " I "
+  ],
+  "result": {
+    "count": 2,
+    "id": "elevatorsandmore:industrial_elevator_station"
+  }
+}

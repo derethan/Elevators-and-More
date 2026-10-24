@@ -1,0 +1,12 @@
+{
+  "variants": {
+    "docked=false,facing=north": { "model": "elevatorsandmore:block/industrial_elevator_station", "y": 0 },
+    "docked=false,facing=east":  { "model": "elevatorsandmore:block/industrial_elevator_station", "y": 90 },
+    "docked=false,facing=south": { "model": "elevatorsandmore:block/industrial_elevator_station", "y": 180 },
+    "docked=false,facing=west":  { "model": "elevatorsandmore:block/industrial_elevator_station", "y": 270 },
+    "docked=true,facing=north":  { "model": "elevatorsandmore:block/industrial_elevator_station_docked", "y": 0 },
+    "docked=true,facing=east":   { "model": "elevatorsandmore:block/industrial_elevator_station_docked", "y": 90 },
+    "docked=true,facing=south":  { "model": "elevatorsandmore:block/industrial_elevator_station_docked", "y": 180 },
+    "docked=true,facing=west":   { "model": "elevatorsandmore:block/industrial_elevator_station_docked", "y": 270 }
+  }
+}

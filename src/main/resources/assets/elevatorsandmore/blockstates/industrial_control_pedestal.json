@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "elevatorsandmore:block/industrial_control_pedestal", "y": 0 },
+    "facing=east":  { "model": "elevatorsandmore:block/industrial_control_pedestal", "y": 90 },
+    "facing=south": { "model": "elevatorsandmore:block/industrial_control_pedestal", "y": 180 },
+    "facing=west":  { "model": "elevatorsandmore:block/industrial_control_pedestal", "y": 270 }
+  }
+}

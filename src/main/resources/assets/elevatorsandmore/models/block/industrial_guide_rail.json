@@ -1,0 +1,21 @@
+{
+  "textures": {
+    "particle": "elevatorsandmore:block/industrial_guide_rail",
+    "rail": "elevatorsandmore:block/industrial_guide_rail",
+    "flange": "elevatorsandmore:block/industrial_elevator_floor_side"
+  },
+  "elements": [
+    {
+      "from": [ 1, 0, 12 ],
+      "to": [ 15, 16, 16 ],
+      "faces": {
+        "north": { "uv": [ 1, 0, 15, 16 ], "texture": "#rail" },
+        "east":  { "uv": [ 12, 0, 16, 16 ], "texture": "#flange" },
+        "south": { "uv": [ 1, 0, 15, 16 ], "texture": "#rail" },
+        "west":  { "uv": [ 0, 0, 4, 16 ], "texture": "#flange" },
+        "up":    { "uv": [ 1, 12, 15, 16 ], "texture": "#flange" },
+        "down":  { "uv": [ 1, 12, 15, 16 ], "texture": "#flange" }
+      }
+    }
+  ]
+}

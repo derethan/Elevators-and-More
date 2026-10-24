@@ -1,3 +1,15 @@
 {
-  "itemGroup.elevatorsandmore": "Elevators and More"
+  "itemGroup.elevatorsandmore": "Elevators and More",
+  "block.elevatorsandmore.industrial_guide_rail": "Industrial Guide Rail",
+  "item.elevatorsandmore.industrial_guide_rail": "Industrial Guide Rail",
+  "block.elevatorsandmore.industrial_elevator_floor": "Industrial Elevator Floor",
+  "item.elevatorsandmore.industrial_elevator_floor": "Industrial Elevator Floor",
+  "block.elevatorsandmore.industrial_safety_railing": "Industrial Safety Railing",
+  "item.elevatorsandmore.industrial_safety_railing": "Industrial Safety Railing",
+  "block.elevatorsandmore.industrial_control_pedestal": "Elevator Control Pedestal",
+  "item.elevatorsandmore.industrial_control_pedestal": "Elevator Control Pedestal",
+  "block.elevatorsandmore.industrial_elevator_station": "Industrial Elevator Station",
+  "item.elevatorsandmore.industrial_elevator_station": "Industrial Elevator Station",
+  "entity.elevatorsandmore.industrial_elevator_carriage": "Industrial Elevator Carriage",
+  "gui.elevatorsandmore.elevator_control.title": "Industrial Elevator Control"
 }

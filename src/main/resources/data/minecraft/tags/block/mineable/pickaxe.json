@@ -1,0 +1,10 @@
+{
+  "replace": false,
+  "values": [
+    "elevatorsandmore:industrial_guide_rail",
+    "elevatorsandmore:industrial_elevator_floor",
+    "elevatorsandmore:industrial_safety_railing",
+    "elevatorsandmore:industrial_control_pedestal",
+    "elevatorsandmore:industrial_elevator_station"
+  ]
+}

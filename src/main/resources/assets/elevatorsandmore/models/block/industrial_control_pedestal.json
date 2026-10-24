@@ -1,0 +1,46 @@
+{
+  "textures": {
+    "particle": "elevatorsandmore:block/industrial_control_pedestal",
+    "pedestal": "elevatorsandmore:block/industrial_control_pedestal",
+    "post": "elevatorsandmore:block/industrial_elevator_floor_side"
+  },
+  "elements": [
+    {
+      "name": "base",
+      "from": [ 4, 0, 4 ],
+      "to": [ 12, 2, 12 ],
+      "faces": {
+        "north": { "uv": [ 4, 14, 12, 16 ], "texture": "#post" },
+        "east":  { "uv": [ 4, 14, 12, 16 ], "texture": "#post" },
+        "south": { "uv": [ 4, 14, 12, 16 ], "texture": "#post" },
+        "west":  { "uv": [ 4, 14, 12, 16 ], "texture": "#post" },
+        "up":    { "uv": [ 4, 4, 12, 12 ], "texture": "#post" },
+        "down":  { "uv": [ 4, 4, 12, 12 ], "texture": "#post" }
+      }
+    },
+    {
+      "name": "post",
+      "from": [ 6, 2, 6 ],
+      "to": [ 10, 11, 10 ],
+      "faces": {
+        "north": { "uv": [ 6, 2, 10, 11 ], "texture": "#post" },
+        "east":  { "uv": [ 6, 2, 10, 11 ], "texture": "#post" },
+        "south": { "uv": [ 6, 2, 10, 11 ], "texture": "#post" },
+        "west":  { "uv": [ 6, 2, 10, 11 ], "texture": "#post" }
+      }
+    },
+    {
+      "name": "console_head",
+      "from": [ 3, 11, 3 ],
+      "to": [ 13, 16, 13 ],
+      "faces": {
+        "north": { "uv": [ 3, 2, 13, 7 ], "texture": "#pedestal" },
+        "east":  { "uv": [ 0, 0, 10, 5 ], "texture": "#pedestal" },
+        "south": { "uv": [ 3, 11, 13, 16 ], "texture": "#pedestal" },
+        "west":  { "uv": [ 0, 0, 10, 5 ], "texture": "#pedestal" },
+        "up":    { "uv": [ 3, 2, 13, 12 ], "texture": "#pedestal" },
+        "down":  { "uv": [ 3, 3, 13, 13 ], "texture": "#post" }
+      }
+    }
+  ]
+}

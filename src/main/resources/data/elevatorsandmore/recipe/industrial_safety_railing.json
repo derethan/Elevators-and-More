@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "key": {
+    "B": "minecraft:iron_bars",
+    "Y": "minecraft:yellow_dye"
+  },
+  "pattern": [
+    "BBB",
+    "Y Y"
+  ],
+  "result": {
+    "count": 6,
+    "id": "elevatorsandmore:industrial_safety_railing"
+  }
+}

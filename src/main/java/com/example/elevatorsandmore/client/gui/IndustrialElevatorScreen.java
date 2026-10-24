@@ -158,7 +158,7 @@ public class IndustrialElevatorScreen extends Screen {
                 break;
             }
         }
-        if (currentName.isEmpty()) currentName = "Floor Y=" + this.originPos.getY();
+        if (currentName.isEmpty()) currentName = "Floor Y=" + (this.originPos.getY() - 2);
 
         this.renameBox = this.addRenderableWidget(
                 new EditBox(this.font, xo + 12, yo + 166, 150, 18, Component.literal("Floor Name"))

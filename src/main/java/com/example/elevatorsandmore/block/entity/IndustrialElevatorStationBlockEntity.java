@@ -13,12 +13,12 @@ public class IndustrialElevatorStationBlockEntity extends BlockEntity {
 
     public IndustrialElevatorStationBlockEntity(BlockPos pos, BlockState blockState) {
         super(ElevatorsAndMore.INDUSTRIAL_ELEVATOR_STATION_BLOCK_ENTITY.get(), pos, blockState);
-        this.floorName = "Floor Y=" + pos.getY();
+        this.floorName = "Floor Y=" + (pos.getY() - 2);
     }
 
     public String getFloorName() {
-        if (this.floorName == null || this.floorName.trim().isEmpty()) {
-            return "Floor Y=" + this.worldPosition.getY();
+        if (this.floorName == null || this.floorName.trim().isEmpty() || this.floorName.equals("Floor Y=" + this.worldPosition.getY())) {
+            return "Floor Y=" + (this.worldPosition.getY() - 2);
         }
         return this.floorName;
     }
@@ -28,7 +28,7 @@ public class IndustrialElevatorStationBlockEntity extends BlockEntity {
         if (cleaned.length() > 32) {
             cleaned = cleaned.substring(0, 32);
         }
-        this.floorName = cleaned.isEmpty() ? ("Floor Y=" + this.worldPosition.getY()) : cleaned;
+        this.floorName = cleaned.isEmpty() ? ("Floor Y=" + (this.worldPosition.getY() - 2)) : cleaned;
         this.setChanged();
     }
 
@@ -41,6 +41,6 @@ public class IndustrialElevatorStationBlockEntity extends BlockEntity {
     @Override
     protected void loadAdditional(ValueInput input) {
         super.loadAdditional(input);
-        this.floorName = input.getStringOr("FloorName", "Floor Y=" + this.worldPosition.getY());
+        this.floorName = input.getStringOr("FloorName", "Floor Y=" + (this.worldPosition.getY() - 2));
     }
 }

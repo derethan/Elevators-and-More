@@ -30,6 +30,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -138,18 +139,18 @@ public class ElevatorShaftHelper {
                     if (be instanceof IndustrialElevatorStationBlockEntity stationBE) {
                         foundPositions.add(stationCandidate);
 
-                        // If the station was placed at eye level (e.g. Y=65 above floor Y=64),
-                        // detect if there's a floor block directly at Y-1 or Y-2
-                        int resolvedFloorY = y;
-                        if (hasFloorNearby(level, railPos, y - 1)) {
-                            resolvedFloorY = y - 1;
-                        } else if (hasFloorNearby(level, railPos, y - 2)) {
+                        // The Elevator Control Board is mounted on the wall with 1 block of space
+                        // between the board and the elevator base (board at Y, floor base at Y-2)
+                        int resolvedFloorY = y - 2;
+                        if (hasFloorNearby(level, railPos, y - 2)) {
                             resolvedFloorY = y - 2;
+                        } else if (hasFloorNearby(level, railPos, y - 1)) {
+                            resolvedFloorY = y - 1;
                         } else if (hasFloorNearby(level, railPos, y)) {
                             resolvedFloorY = y;
                         } else {
-                            // Default: station is at eye level, floor is Y-1
-                            resolvedFloorY = stationCandidate.getY() - 1;
+                            // Default: board at chest/eye level, 1 block space above elevator base -> floor is Y-2
+                            resolvedFloorY = stationCandidate.getY() - 2;
                         }
 
                         stations.add(new DiscoveredStation(stationCandidate, stationBE, resolvedFloorY));
@@ -302,12 +303,12 @@ public class ElevatorShaftHelper {
         IndustrialElevatorCarriageEntity movingCarriage = findMovingCarriage(level, railPos);
 
         Integer stationaryY = findCurrentPlatformY(level, railPos);
-        int currentY = movingCarriage != null ? (int) Math.round(movingCarriage.getY()) : (stationaryY != null ? stationaryY : originPos.getY());
+        int currentY = movingCarriage != null ? (int) Math.round(movingCarriage.getY()) : (stationaryY != null ? stationaryY : originPos.getY() - 2);
         boolean isMoving = movingCarriage != null;
 
         List<FloorInfo> floorInfos = new ArrayList<>();
         for (DiscoveredStation ds : stations) {
-            boolean docked = !isMoving && Math.abs(ds.floorY() - currentY) <= 1;
+            boolean docked = !isMoving && ds.floorY() == currentY;
             floorInfos.add(new FloorInfo(ds.pos(), ds.entity().getFloorName(), ds.floorY(), docked));
         }
 
@@ -333,14 +334,16 @@ public class ElevatorShaftHelper {
                 startElevator(level, railPos, payload.originPos(), payload.targetY(), player);
             }
             case ElevatorActionPayload.ACTION_CALL -> {
-                // Find floor Y for this station
-                int callFloorY = payload.originPos().getY();
-                if (hasFloorNearby(level, railPos, payload.originPos().getY() - 1)) {
-                    callFloorY = payload.originPos().getY() - 1;
-                } else if (hasFloorNearby(level, railPos, payload.originPos().getY() - 2)) {
+                // Find floor Y for this station (with 1 block of space between caller and base)
+                int callFloorY = payload.originPos().getY() - 2;
+                if (hasFloorNearby(level, railPos, payload.originPos().getY() - 2)) {
                     callFloorY = payload.originPos().getY() - 2;
+                } else if (hasFloorNearby(level, railPos, payload.originPos().getY() - 1)) {
+                    callFloorY = payload.originPos().getY() - 1;
+                } else if (hasFloorNearby(level, railPos, payload.originPos().getY())) {
+                    callFloorY = payload.originPos().getY();
                 } else {
-                    callFloorY = payload.originPos().getY() - 1; // Default floor height below eye-level station
+                    callFloorY = payload.originPos().getY() - 2; // Default: 1 block of space between caller and base
                 }
                 startElevator(level, railPos, payload.originPos(), callFloorY, player);
             }
@@ -407,10 +410,29 @@ public class ElevatorShaftHelper {
             return false;
         }
 
+        // Spawn carriage entity FIRST so entity collision immediately exists beneath standing entities
+        IndustrialElevatorCarriageEntity carriage = new IndustrialElevatorCarriageEntity(
+                ElevatorsAndMore.INDUSTRIAL_ELEVATOR_CARRIAGE_ENTITY.get(),
+                level
+        );
+        carriage.setupPlatform(railPos, floorAnchor, departureY, targetFloorY, blocks);
+        level.addFreshEntity(carriage);
+
         // Remove blocks from the world cleanly
         for (CapturedBlockEntry entry : blocks) {
             BlockPos worldPos = floorAnchor.offset(entry.relX(), entry.relY(), entry.relZ());
             level.setBlock(worldPos, Blocks.AIR.defaultBlockState(), 3);
+        }
+
+        // Keep entities standing on the newly formed carriage without falling
+        AABB startBox = new AABB(
+                floorAnchor.getX() + carriage.getMinRelX() - 0.1, departureY - 0.2, floorAnchor.getZ() + carriage.getMinRelZ() - 0.1,
+                floorAnchor.getX() + carriage.getMaxRelX() + 1.1, departureY + 2.5, floorAnchor.getZ() + carriage.getMaxRelZ() + 1.1
+        );
+        for (Entity e : level.getEntities(carriage, startBox, ent -> ent.isAlive() && !ent.isPassenger())) {
+            e.setPos(e.getX(), departureY + 1.0, e.getZ());
+            e.fallDistance = 0.0F;
+            e.setOnGround(true);
         }
 
         // Update station docked states
@@ -421,14 +443,6 @@ public class ElevatorShaftHelper {
                 level.setBlock(ds.pos(), st.setValue(IndustrialElevatorStationBlock.DOCKED, false), 3);
             }
         }
-
-        // Spawn carriage entity
-        IndustrialElevatorCarriageEntity carriage = new IndustrialElevatorCarriageEntity(
-                ElevatorsAndMore.INDUSTRIAL_ELEVATOR_CARRIAGE_ENTITY.get(),
-                level
-        );
-        carriage.setupPlatform(railPos, floorAnchor, departureY, targetFloorY, blocks);
-        level.addFreshEntity(carriage);
 
         // Play departure sound
         level.playSound(null, floorAnchor, SoundEvents.IRON_TRAPDOOR_OPEN, SoundSource.BLOCKS, 1.0F, 0.8F);

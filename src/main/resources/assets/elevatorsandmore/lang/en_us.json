@@ -8,8 +8,8 @@
   "item.elevatorsandmore.industrial_safety_railing": "Industrial Safety Railing",
   "block.elevatorsandmore.industrial_control_pedestal": "Elevator Control Pedestal",
   "item.elevatorsandmore.industrial_control_pedestal": "Elevator Control Pedestal",
-  "block.elevatorsandmore.industrial_elevator_station": "Industrial Elevator Station",
-  "item.elevatorsandmore.industrial_elevator_station": "Industrial Elevator Station",
+  "block.elevatorsandmore.industrial_elevator_station": "Elevator Control Board",
+  "item.elevatorsandmore.industrial_elevator_station": "Elevator Control Board",
   "entity.elevatorsandmore.industrial_elevator_carriage": "Industrial Elevator Carriage",
   "gui.elevatorsandmore.elevator_control.title": "Industrial Elevator Control"
 }

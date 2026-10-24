@@ -24,6 +24,8 @@ import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.Relative;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -86,8 +88,8 @@ public class IndustrialElevatorCarriageEntity extends Entity {
         }
         this.entityData.set(DATA_BLOCKS, sb.toString());
 
-        this.setPos(floorAnchor.getX() + 0.5, startY, floorAnchor.getZ() + 0.5);
         this.refreshParsedBlocks();
+        this.setPos(floorAnchor.getX() + 0.5, startY, floorAnchor.getZ() + 0.5);
     }
 
     public BlockPos getAnchorRailPos() {
@@ -110,9 +112,22 @@ public class IndustrialElevatorCarriageEntity extends Entity {
         this.setTargetY((int) Math.round(this.getY()));
     }
 
+    public int getMinRelX() { return minRelX; }
+    public int getMaxRelX() { return maxRelX; }
+    public int getMinRelZ() { return minRelZ; }
+    public int getMaxRelZ() { return maxRelZ; }
+
     public List<ElevatorShaftHelper.CapturedBlockEntry> getParsedBlocks() {
         refreshParsedBlocks();
         return this.parsedBlocks;
+    }
+
+    @Override
+    public void onSyncedDataUpdated(EntityDataAccessor<?> accessor) {
+        super.onSyncedDataUpdated(accessor);
+        if (DATA_BLOCKS.equals(accessor) || DATA_FLOOR_ANCHOR.equals(accessor)) {
+            this.refreshParsedBlocks();
+        }
     }
 
     private void refreshParsedBlocks() {
@@ -145,6 +160,20 @@ public class IndustrialElevatorCarriageEntity extends Entity {
                 } catch (NumberFormatException ignored) {}
             }
         }
+        this.setBoundingBox(this.makeBoundingBox());
+    }
+
+    @Override
+    protected AABB makeBoundingBox(Vec3 position) {
+        BlockPos anchor = this.getFloorAnchorPos();
+        if (anchor == null || anchor.equals(BlockPos.ZERO) || this.parsedBlocks.isEmpty()) {
+            return super.makeBoundingBox(position);
+        }
+        double boxMinX = anchor.getX() + minRelX;
+        double boxMaxX = anchor.getX() + maxRelX + 1.0;
+        double boxMinZ = anchor.getZ() + minRelZ;
+        double boxMaxZ = anchor.getZ() + maxRelZ + 1.0;
+        return new AABB(boxMinX, position.y, boxMinZ, boxMaxX, position.y + 1.0, boxMaxZ);
     }
 
     @Override
@@ -155,6 +184,11 @@ public class IndustrialElevatorCarriageEntity extends Entity {
     @Override
     public boolean canBeCollidedWith(@Nullable Entity other) {
         return !this.isRemoved();
+    }
+
+    @Override
+    public boolean canCollideWith(Entity entity) {
+        return !this.isRemoved() && !this.isPassengerOfSameVehicle(entity);
     }
 
     @Override
@@ -181,13 +215,11 @@ public class IndustrialElevatorCarriageEntity extends Entity {
 
         refreshParsedBlocks();
 
-        // Update bounding box to cover the entire custom platform
         BlockPos anchor = this.getFloorAnchorPos();
         double boxMinX = anchor.getX() + minRelX;
         double boxMaxX = anchor.getX() + maxRelX + 1.0;
         double boxMinZ = anchor.getZ() + minRelZ;
         double boxMaxZ = anchor.getZ() + maxRelZ + 1.0;
-        this.setBoundingBox(new AABB(boxMinX, currentY, boxMinZ, boxMaxX, currentY + 1.0, boxMaxZ));
 
         if (Math.abs(diff) <= 0.05) {
             if (!this.level().isClientSide()) {
@@ -198,33 +230,78 @@ public class IndustrialElevatorCarriageEntity extends Entity {
 
         double step = Math.signum(diff) * Math.min(Math.abs(diff), speed);
         double nextY = currentY + step;
+
+        // Advance platform position (makeBoundingBox updates the bounding box automatically)
         this.setPos(this.getX(), nextY, this.getZ());
 
         // Carry passengers & standing entities smoothly
-        carryStandingEntities(boxMinX, boxMaxX, boxMinZ, boxMaxZ, currentY, step);
+        carryStandingEntities(boxMinX, boxMaxX, boxMinZ, boxMaxZ, currentY, nextY, step);
     }
 
     private void carryStandingEntities(
             double minX, double maxX, double minZ, double maxZ,
-            double platformY, double step
+            double oldY, double newY, double step
     ) {
-        // Search volume right on top of the moving platform floor
-        AABB scanBox = new AABB(
-                minX - 0.1, platformY - 0.1, minZ - 0.1,
-                maxX + 0.1, platformY + 2.2, maxZ + 0.1
+        double oldFloorSurfaceY = oldY + 1.0;
+        double newFloorSurfaceY = newY + 1.0;
+
+        // Expanded query box to detect entities standing on or near the moving platform
+        AABB searchBox = new AABB(
+                minX - 0.1,
+                Math.min(oldY, newY) - 0.5,
+                minZ - 0.1,
+                maxX + 0.1,
+                Math.max(oldY, newY) + 3.0,
+                maxZ + 0.1
         );
 
-        List<Entity> riders = this.level().getEntities(this, scanBox, e -> e.isAlive() && !e.isPassenger());
+        List<Entity> riders = this.level().getEntities(this, searchBox, e -> e.isAlive() && !e.isPassenger());
         for (Entity e : riders) {
-            // Apply delta Y translation
-            e.setPos(e.getX(), e.getY() + step, e.getZ());
-            e.fallDistance = 0.0F;
-            e.setOnGround(true);
+            AABB eb = e.getBoundingBox();
+            // Verify horizontal overlap with platform
+            if (eb.maxX <= minX || eb.minX >= maxX || eb.maxZ <= minZ || eb.minZ >= maxZ) {
+                continue;
+            }
 
-            if (step < 0) {
-                // Moving downward: suppress gravity velocity so rider does not bob/clip
+            double entityY = e.getY();
+            boolean shouldCarry = false;
+
+            if (step > 0) {
+                // Moving UP:
+                // Carry if entity was on the floor before this step or is being penetrated by the rising floor
+                if (entityY >= oldFloorSurfaceY - 0.5 && entityY <= newFloorSurfaceY + 0.05) {
+                    shouldCarry = true;
+                }
+            } else {
+                // Moving DOWN:
+                // Carry if entity was standing on the floor before this step or penetrated floor
+                boolean wasStandingOnFloor = (entityY >= oldFloorSurfaceY - 0.25 && entityY <= oldFloorSurfaceY + 0.35);
+                boolean penetratedFloor = (entityY < newFloorSurfaceY && entityY >= newFloorSurfaceY - 0.5);
+                if (wasStandingOnFloor || penetratedFloor) {
+                    shouldCarry = true;
+                }
+            }
+
+            if (shouldCarry) {
+                // Keep entity resting exactly on top of the solid floor
+                double targetY = newFloorSurfaceY;
+
+                // Move entity directly to the floor surface without double-stepping or teleport feedback loops
+                e.setPos(e.getX(), targetY, e.getZ());
+
+                // Reset downward velocity and fall distance so they don't fall through or take damage
                 Vec3 vel = e.getDeltaMovement();
-                e.setDeltaMovement(vel.x, 0.0, vel.z);
+                double newVelY = Math.max(vel.y, 0.0);
+                e.setDeltaMovement(vel.x, newVelY, vel.z);
+                e.fallDistance = 0.0F;
+                e.setOnGround(true);
+
+                // Corrective resync only if ServerPlayer suffers massive desync (> 1.5 blocks)
+                if (!this.level().isClientSide() && e instanceof ServerPlayer sp) {
+                    if (Math.abs(sp.getY() - targetY) > 1.5) {
+                        sp.teleportTo((ServerLevel) sp.level(), sp.getX(), targetY, sp.getZ(), Relative.ROTATION, 0.0F, 0.0F, true);
+                    }
+                }
             }
         }
     }
@@ -242,22 +319,38 @@ public class IndustrialElevatorCarriageEntity extends Entity {
         // Lift entities safely onto the placed floor surface
         AABB finalPlatformBox = new AABB(
                 newAnchor.getX() + minRelX - 0.1, finalY - 0.2, newAnchor.getZ() + minRelZ - 0.1,
-                newAnchor.getX() + maxRelX + 1.1, finalY + 2.5, newAnchor.getZ() + maxRelZ + 1.1
+                newAnchor.getX() + maxRelX + 1.1, finalY + 3.0, newAnchor.getZ() + maxRelZ + 1.1
         );
         List<Entity> riders = this.level().getEntities(this, finalPlatformBox, e -> e.isAlive() && !e.isPassenger());
         for (Entity e : riders) {
-            e.setPos(e.getX(), finalY + 1.0, e.getZ());
+            if (!this.level().isClientSide() && e instanceof ServerPlayer sp) {
+                sp.teleportTo((ServerLevel) sp.level(), sp.getX(), finalY + 1.0, sp.getZ(), Relative.ROTATION, 0.0F, 0.0F, true);
+            } else {
+                e.setPos(e.getX(), finalY + 1.0, e.getZ());
+            }
             e.fallDistance = 0.0F;
             e.setOnGround(true);
         }
 
-        // Set DOCKED state on any adjacent station at this final floor
+        // Set DOCKED state on any adjacent station for this final floor
         BlockPos railPos = this.getAnchorRailPos();
-        for (Direction dir : Direction.Plane.HORIZONTAL) {
-            BlockPos candidate = new BlockPos(railPos.getX(), finalY, railPos.getZ()).relative(dir);
-            BlockState st = this.level().getBlockState(candidate);
-            if (st.hasProperty(IndustrialElevatorStationBlock.DOCKED)) {
-                this.level().setBlock(candidate, st.setValue(IndustrialElevatorStationBlock.DOCKED, true), 3);
+        int railX = railPos.getX();
+        int railZ = railPos.getZ();
+        for (int checkY = finalY; checkY <= finalY + 3; checkY++) {
+            for (int dx = -4; dx <= 4; dx++) {
+                for (int dz = -4; dz <= 4; dz++) {
+                    BlockPos candidate = new BlockPos(railX + dx, checkY, railZ + dz);
+                    BlockState st = this.level().getBlockState(candidate);
+                    if (st.hasProperty(IndustrialElevatorStationBlock.DOCKED)) {
+                        int stationFloorY = candidate.getY() - 2;
+                        if (candidate.getY() - 1 == finalY) stationFloorY = finalY;
+                        else if (candidate.getY() == finalY) stationFloorY = finalY;
+
+                        if (stationFloorY == finalY) {
+                            this.level().setBlock(candidate, st.setValue(IndustrialElevatorStationBlock.DOCKED, true), 3);
+                        }
+                    }
+                }
             }
         }
 

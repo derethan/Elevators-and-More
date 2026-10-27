@@ -9,6 +9,129 @@ tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
 }
 
+// =========================================================================
+// Automatic Version Management & Source Tracking
+// =========================================================================
+
+class VersionManager {
+    static String calculateSourceHash(File projectDir) {
+        def digest = java.security.MessageDigest.getInstance("SHA-256")
+        File srcMain = new File(projectDir, "src/main")
+        if (!srcMain.exists()) return ""
+
+        List<File> files = []
+        srcMain.eachFileRecurse(groovy.io.FileType.FILES) { File f ->
+            String norm = f.path.replace('\\', '/')
+            if (!norm.contains('/.cache/') && !norm.endsWith('.bbmodel') && !norm.endsWith('thumbs.db') && !norm.endsWith('.DS_Store')) {
+                files.add(f)
+            }
+        }
+        files.sort { it.absolutePath }.each { File f ->
+            digest.update(f.name.getBytes('UTF-8'))
+            digest.update(f.readBytes())
+        }
+        return digest.digest().encodeHex().toString()
+    }
+
+    static String bumpVersionString(String currentVersion, String type = 'patch') {
+        def matcher = (currentVersion =~ /^(\d+)\.(\d+)\.(\d+)(.*)$/)
+        if (matcher.matches()) {
+            int major = matcher[0][1] as int
+            int minor = matcher[0][2] as int
+            int patch = matcher[0][3] as int
+            String suffix = matcher[0][4] ?: ''
+
+            switch (type.toLowerCase()) {
+                case 'major':
+                    major++
+                    minor = 0
+                    patch = 0
+                    break
+                case 'minor':
+                    minor++
+                    patch = 0
+                    break
+                case 'patch':
+                default:
+                    patch++
+                    break
+            }
+            return "${major}.${minor}.${patch}${suffix}"
+        }
+        return currentVersion
+    }
+
+    static void applyNewVersion(File projectDir, String newVersion, String sourceHash, String archivesName) {
+        // 1. Update gradle.properties
+        File propsFile = new File(projectDir, 'gradle.properties')
+        if (propsFile.exists()) {
+            String content = propsFile.getText('UTF-8')
+            String updated = content.replaceAll(/(?m)^mod_version\s*=\s*.+$/, "mod_version=${newVersion}")
+            propsFile.setText(updated, 'UTF-8')
+        }
+
+        // 2. Update .last_source_hash
+        File hashFile = new File(projectDir, '.last_source_hash')
+        hashFile.setText(sourceHash, 'UTF-8')
+
+        // 3. Update jar references in README.md and CURSEFORGE.md
+        ['README.md', 'CURSEFORGE.md'].each { filename ->
+            File f = new File(projectDir, filename)
+            if (f.exists()) {
+                String text = f.getText('UTF-8')
+                String replaced = text.replaceAll(/(?i)${java.util.regex.Pattern.quote(archivesName)}-\d+\.\d+\.\d+(\.[0-9a-zA-Z_-]+)?\.jar/, "${archivesName}-${newVersion}.jar")
+                if (replaced != text) {
+                    f.setText(replaced, 'UTF-8')
+                }
+            }
+        }
+
+        // 4. Update CHANGELOG.md if section doesn't exist
+        File changelogFile = new File(projectDir, 'CHANGELOG.md')
+        if (changelogFile.exists()) {
+            String text = changelogFile.getText('UTF-8')
+            if (!text.contains("## [${newVersion}]")) {
+                String today = new java.text.SimpleDateFormat('yyyy-MM-dd').format(new Date())
+                String header = "## [${newVersion}] - ${today}\n\n### Changed\n- Mod update\n\n---\n\n"
+                int idx = text.indexOf('## [')
+                if (idx != -1) {
+                    text = text.substring(0, idx) + header + text.substring(idx)
+                    changelogFile.setText(text, 'UTF-8')
+                }
+            }
+        }
+    }
+}
+
+// Automatically detect mod changes and bump patch version on packaging/build tasks
+File projectRootDir = project.projectDir
+String targetArchivesName = project.findProperty('mod_id') ?: 'elevatorsandmore'
+def requestedTasks = gradle.startParameter.taskNames
+boolean isBuildOrPackaging = requestedTasks.any { name ->
+    def lower = name.toLowerCase()
+    lower.contains('jar') || lower.contains('build') || lower.contains('assemble') || lower.contains('publish')
+}
+boolean isExplicitBump = requestedTasks.any { it.toLowerCase().contains('bump') }
+boolean autoBumpDisabled = project.hasProperty('noAutoBump') || project.hasProperty('noBump')
+
+if (isBuildOrPackaging && !isExplicitBump && !autoBumpDisabled) {
+    String currentHash = VersionManager.calculateSourceHash(projectRootDir)
+    File hashFile = new File(projectRootDir, '.last_source_hash')
+    String lastHash = hashFile.exists() ? hashFile.getText('UTF-8').trim() : ''
+
+    if (lastHash.isEmpty()) {
+        hashFile.setText(currentHash, 'UTF-8')
+    } else if (currentHash != lastHash) {
+        String oldVersion = project.findProperty('mod_version') ?: '1.0.0'
+        String newVersion = VersionManager.bumpVersionString(oldVersion, 'patch')
+        VersionManager.applyNewVersion(projectRootDir, newVersion, currentHash, targetArchivesName)
+        project.ext.mod_version = newVersion
+        mod_version = newVersion
+        println "[AutoBump] Mod changes detected in src/main!"
+        println "[AutoBump] Automatically bumped mod_version: ${oldVersion} -> ${newVersion}"
+    }
+}
+
 version = mod_version
 group = mod_group_id
 
@@ -132,3 +255,79 @@ idea {
         downloadJavadoc = true
     }
 }
+
+// =========================================================================
+// Explicit Versioning Tasks
+// =========================================================================
+
+tasks.register('bumpPatch') {
+    group = 'versioning'
+    description = 'Bumps the patch version in gradle.properties and documentation.'
+    doLast {
+        File propsFile = new File(projectRootDir, 'gradle.properties')
+        String current = '1.0.0'
+        if (propsFile.exists()) {
+            def match = (propsFile.getText('UTF-8') =~ /(?m)^mod_version\s*=\s*(.+)$/)
+            if (match.find()) current = match.group(1).trim()
+        }
+        String next = VersionManager.bumpVersionString(current, 'patch')
+        VersionManager.applyNewVersion(projectRootDir, next, VersionManager.calculateSourceHash(projectRootDir), targetArchivesName)
+        println "[Version] Bumped patch version: ${current} -> ${next}"
+    }
+}
+
+tasks.register('bumpMinor') {
+    group = 'versioning'
+    description = 'Bumps the minor version in gradle.properties and documentation.'
+    doLast {
+        File propsFile = new File(projectRootDir, 'gradle.properties')
+        String current = '1.0.0'
+        if (propsFile.exists()) {
+            def match = (propsFile.getText('UTF-8') =~ /(?m)^mod_version\s*=\s*(.+)$/)
+            if (match.find()) current = match.group(1).trim()
+        }
+        String next = VersionManager.bumpVersionString(current, 'minor')
+        VersionManager.applyNewVersion(projectRootDir, next, VersionManager.calculateSourceHash(projectRootDir), targetArchivesName)
+        println "[Version] Bumped minor version: ${current} -> ${next}"
+    }
+}
+
+tasks.register('bumpMajor') {
+    group = 'versioning'
+    description = 'Bumps the major version in gradle.properties and documentation.'
+    doLast {
+        File propsFile = new File(projectRootDir, 'gradle.properties')
+        String current = '1.0.0'
+        if (propsFile.exists()) {
+            def match = (propsFile.getText('UTF-8') =~ /(?m)^mod_version\s*=\s*(.+)$/)
+            if (match.find()) current = match.group(1).trim()
+        }
+        String next = VersionManager.bumpVersionString(current, 'major')
+        VersionManager.applyNewVersion(projectRootDir, next, VersionManager.calculateSourceHash(projectRootDir), targetArchivesName)
+        println "[Version] Bumped major version: ${current} -> ${next}"
+    }
+}
+
+tasks.register('bumpVersion') {
+    group = 'versioning'
+    description = 'Alias for bumpPatch.'
+    dependsOn 'bumpPatch'
+}
+
+tasks.register('checkModChanges') {
+    group = 'versioning'
+    description = 'Checks if mod source files have changed since the last recorded version/hash.'
+    doLast {
+        String currentHash = VersionManager.calculateSourceHash(projectRootDir)
+        File hashFile = new File(projectRootDir, '.last_source_hash')
+        String lastHash = hashFile.exists() ? hashFile.getText('UTF-8').trim() : ''
+        if (!currentHash.equals(lastHash)) {
+            println "[ModStatus] CHANGED: Sources have changed since last version bump."
+            println "  Previous hash: ${lastHash ? lastHash.take(12) : '(none)'}..."
+            println "  Current hash:  ${currentHash.take(12)}..."
+        } else {
+            println "[ModStatus] UNCHANGED: No modifications since last version bump (hash: ${currentHash.take(12)}...)."
+        }
+    }
+}
+

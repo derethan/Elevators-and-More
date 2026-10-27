@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Auto-bump mod version on commit if mod sources in src/main are modified
+staged_mod_files=$(git diff --cached --name-only -- "src/main/")
+if [ -n "$staged_mod_files" ]; then
+    echo "[Git Hook] Mod changes detected in src/main/ - ensuring version bump..."
+    ./gradlew bumpVersion -q --no-daemon
+    git add gradle.properties README.md CURSEFORGE.md CHANGELOG.md .last_source_hash 2>/dev/null || true
+    echo "[Git Hook] mod_version bumped and staged successfully."
+fi
